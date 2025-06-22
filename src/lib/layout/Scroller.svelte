@@ -236,7 +236,7 @@
 		/* in theory this helps prevent jumping */
 		will-change: transform;
 		/* -webkit-transform: translate3d(0, 0, 0);
-          -moz-transform: translate3d(0, 0, 0);
-          transform: translate3d(0, 0, 0); */
+		-moz-transform: translate3d(0, 0, 0);
+		transform: translate3d(0, 0, 0); */
 	}
 </style>

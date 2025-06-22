@@ -5,35 +5,31 @@
 		FillLayer,
 		LineLayer,
 		hoverStateFilter,
-		isTextLayer,
 		CircleLayer,
 		SymbolLayer,
 		zoomTransition,
-		FillExtrusionLayer,
-		HeatmapLayer,
-		ZoomRange,
-		Popup
+		HeatmapLayer
 	} from 'svelte-maplibre';
 	import type { FeatureCollection, Feature, Point } from 'geojson';
 	import * as turf from '@turf/turf';
-	import { geoCentroid } from 'd3-geo';
 	import Section from '$lib/layout/Section.svelte';
 	import Scroller from '$lib/layout/Scroller.svelte';
-	import planningareas from '../assets/singapore_districts.geojson?url';
 	import { contrastingColor } from '$lib/colors.js';
 	import { onMount } from 'svelte';
 	import { derived } from 'svelte/store';
-	import postalcodes from '../assets/singpostcode.geojson?url';
 	import { planningAreasStore, postalCodesStore } from '$lib/stores';
 	import { streetsStyle } from '$lib/styles';
 	import Em from '$lib/ui/Em.svelte';
 	import { fade } from 'svelte/transition';
+	import Counter from '$lib/ui/Counter.svelte';
 
 	let planningAreasData;
 	let postalCodesData;
 	let planningAreasError;
 	let postalCodesError;
 
+	const planningareas = 'https://data.bearylogical.net/singapore_districts.geojson';
+	const postalcodes = 'https://data.bearylogical.net/singpostcode.geojson';
 	//states
 
 	let showBorder = true;
@@ -49,7 +45,7 @@
 	let showDistricts = false;
 
 	// Variables to hold visible section IDs of Scroller components
-	let mapSectionId;
+	let mapSectionId: string | null = null;
 
 	// CONFIG FOR SCROLLER COMPONENTS
 	// Config
@@ -63,11 +59,13 @@
 				// Action for <section/> with data-id="map01"
 				explore = false;
 				showHeatmap = false;
+				showFill = true;
 				showDistricts = true;
 				showPostalInfo = false;
 				showClusterCircles = false;
 				resetView();
 				showInputOverlay = false;
+				setPanRotate(false);
 			},
 			map02: () => {
 				explore = false;
@@ -77,63 +75,81 @@
 				showPostalInfo = false;
 				showClusterCircles = false;
 				showInputOverlay = false;
+				setPanRotate(false);
 			},
 			map03: () => {
 				explore = false;
 				showHeatmap = true;
 				showDistricts = false;
 				inputValue = '';
-				flyToFilteredPoints(11);
+				flyToFilteredPoints({ zoom: 11, center: false });
 				showPostalInfo = false;
+				setPanRotate(false);
 				showInputOverlay = false;
 			},
 			map04: () => {
 				explore = false;
 				showHeatmap = true;
 				inputValue = '54*';
-				flyToFilteredPoints(14);
+				flyToFilteredPoints({ zoom: 14 });
 				showPostalInfo = false;
 				showClusterCircles = false;
 				showInputOverlay = false;
+				setPanRotate(false);
 			},
 			map05: () => {
 				explore = false;
 				showHeatmap = true;
 				inputValue = '54[1-4]264';
-				flyToFilteredPoints(18, 30, 60);
+				flyToFilteredPoints({ zoom: 18, pitch: 30, bearing: 60 });
 				showPostalInfo = true;
 				showClusterCircles = false;
 				showInputOverlay = false;
+				setPanRotate(false);
 			},
 			map06: () => {
 				explore = false;
 				showHeatmap = true;
 				inputValue = '542264';
-				flyToFilteredPoints(18, 45, 35);
+				flyToFilteredPoints({ zoom: 18, pitch: 45, bearing: 35 });
 				showPostalInfo = true;
 				showClusterCircles = false;
 				showInputOverlay = false;
+				setPanRotate(false);
 			},
 			map07: () => {
 				explore = false;
 				showHeatmap = false;
 				inputValue = '54*264';
-				flyToFilteredPoints(14, 0, 0);
+				flyToFilteredPoints({ zoom: 14, pitch: 0, bearing: 0 });
 				showPostalInfo = false;
 				showClusterCircles = true;
 				showInputOverlay = false;
+				setPanRotate(false);
 			},
 			map08: () => {
 				explore = false;
 				showHeatmap = true;
 				inputValue = '*';
+				displayedValue = '';
 				resetView();
 				showPostalInfo = false;
 				showClusterCircles = false;
 				showInputOverlay = true;
+				setPanRotate(false);
 			}
 		}
 	};
+
+	function setPanRotate(flag: boolean) {
+		if (flag) {
+			map?.dragPan.enable();
+			map?.dragRotate.enable();
+		} else {
+			map?.dragPan.disable();
+			map?.dragRotate.disable();
+		}
+	}
 
 	// Code to run Scroller actions when new caption IDs come into view
 	function runActions(sectionId, actions) {
@@ -146,7 +162,7 @@
 	let loaded: boolean;
 	let touched = false;
 	let showInputOverlay = false;
-	let progressValue;
+	let progressValue: number = 0;
 
 	let textLayers: maplibregl.LayerSpecification[] = [];
 	let hoverArea: Record<string, any> | null = null;
@@ -158,27 +174,68 @@
 	let currentZoom = 10;
 	let inputValue: string | null = null;
 	let filterPostalCodeData: Array | null = null;
+	let previousWorkingPostal: string = null;
 
 	const BUILDING_ZOOM_START = 15;
 	onMount(() => {
 		planningAreasStore.load(planningareas);
+		planningAreasData = derived(
+			planningAreasStore,
+			($planningAreasStore) => $planningAreasStore.data
+		);
 		postalCodesStore.load(postalcodes);
 		postalCodesData = derived(postalCodesStore, ($postalCodesStore) => $postalCodesStore.data);
 	});
 
 	function calculateCenters(g: FeatureCollection): FeatureCollection {
-		let centers: Feature<Point>[] = g.features.map((f) => {
-			return {
-				...f,
-				geometry: {
-					type: 'Point',
-					coordinates: geoCentroid(f)
+		const groupedFeatures: { [key: string]: Feature[] } = {};
+
+		g.features.forEach((feature) => {
+			const district = feature.properties?.districtNumber;
+			if (district) {
+				if (!groupedFeatures[district]) {
+					groupedFeatures[district] = [];
 				}
-			};
+				groupedFeatures[district].push(feature);
+			}
 		});
+
+		// Calculate centroid for each district and merge properties
+		const centroids: Feature<Point>[] = Object.entries(groupedFeatures).map(
+			([district, features]) => {
+				const combined = turf.combine(turf.featureCollection(features));
+				const centroid = turf.centroid(combined);
+
+				// Merge properties from all features in the district
+				const mergedProperties = features.reduce(
+					(acc, feature) => {
+						Object.entries(feature.properties || {}).forEach(([key, value]) => {
+							// Only update if the current value is null/undefined or if it's not set yet
+							if (value != null && (acc[key] == null || acc[key] === '')) {
+								acc[key] = value;
+							}
+						});
+						return acc;
+					},
+					{} as { [key: string]: any }
+				);
+
+				// Ensure the district property is set
+				mergedProperties.district = district;
+
+				// Create a new Feature with Point geometry and merged properties
+				return {
+					type: 'Feature',
+					properties: mergedProperties,
+					geometry: centroid.geometry
+				};
+			}
+		);
+
+		// Return a FeatureCollection
 		return {
 			type: 'FeatureCollection',
-			features: centers
+			features: centroids
 		};
 	}
 
@@ -188,20 +245,12 @@
 			map.fitBounds(bounds, {
 				padding: 50,
 				maxZoom: maxZoom,
-				duration: 3000,
+				duration: 5000,
 				pitch: pitch,
 				bearing: bearing
 			});
 		}
 	}
-	function fitById(id) {
-		if (filterPostalCodeData && id) {
-			let feature = filterPostalCodeData.features.find((d) => d.properties.AREACD == id);
-			let bounds = bbox(feature.geometry);
-			fitBounds(bounds);
-		}
-	}
-
 	function calculateBounds(features) {
 		if (!features || features.length === 0) return null;
 
@@ -229,14 +278,43 @@
 		];
 	}
 
-	function flyToFilteredPoints(maxzoom = 18, pitch = 0, bearing = 0) {
-		if (filterPostalCodeData) {
+	$: filterPostalCodeData = inputValue ? postalCodeDataFilter(inputValue) : [];
+
+	function calculateCentroid(input: FeatureCollection | Feature[]): Feature<Point> {
+		let featureCollection: FeatureCollection;
+
+		// Check if input is already a FeatureCollection
+		if ('type' in input && input.type === 'FeatureCollection') {
+			featureCollection = input;
+		} else {
+			// If it's an array of features, convert it to a FeatureCollection
+			featureCollection = {
+				type: 'FeatureCollection',
+				features: input
+			};
+		}
+		// Use turf.center to calculate the center of the bounding box of all features
+		// const center = turf.center(featureCollection);
+
+		// If we want a more precise centroid, we can use turf.centroid
+		const centroid = turf.centroid(featureCollection);
+
+		// Return the center as a GeoJSON Feature
+		return centroid;
+	}
+	function flyToFilteredPoints({ zoom = 18, pitch = 0, bearing = 0, center = false }) {
+		if (filterPostalCodeData.length > 0) {
 			const bounds = calculateBounds(filterPostalCodeData);
 			if (bounds) {
-				fitBounds(bounds, maxzoom, pitch, bearing);
+				fitBounds(bounds, zoom, pitch, bearing);
+			}
+			if (center) {
+				const centers = calculateCentroid(filterPostalCodeData);
+				map?.flyTo({ center: centers.geometry.coordinates, zoom, pitch, bearing });
 			}
 		}
 	}
+
 	$: colors = contrastingColor(fillColor);
 	$: if (map && loaded) {
 		for (let layer of textLayers) {
@@ -338,29 +416,27 @@
 	}
 
 	$: filterPostalCode = inputValue ? createPostalFilter(inputValue) : null;
-	// $: filterPostalCode = inputValue
-	// 	? [
-	// 			'any',
-	// 			['==', ['slice', ['to-string', ['get', 'POSTAL']], 0, ['length', inputValue]], inputValue],
-	// 			[
-	// 				'match',
-	// 				['to-string', ['get', 'POSTAL']],
-	// 				inputValue.split('*').map(escapeRegExp).join('.*'),
-	// 				true,
-	// 				false
-	// 			]
-	// 		]
-	// 	: undefined;
 
-	$: if (map && loaded && postalCodesData) {
-		if (inputValue || touched) {
-			// console.log('filtering is active');
-			const wildcardFilter = vanillaPostalCodeFilter(inputValue);
-			filterPostalCodeData = $postalCodesStore.data.features?.filter(wildcardFilter);
-		} else {
-			filterPostalCodeData = postalCodesData.features;
-		}
+	function debounce(func, wait) {
+		let timeout;
+		return function executedFunction(...args) {
+			const later = () => {
+				clearTimeout(timeout);
+				func(...args);
+			};
+			clearTimeout(timeout);
+			timeout = setTimeout(later, wait);
+		};
 	}
+
+	const debouncedHandleInput = debounce(handleInput, 500); // 300ms delay
+
+	function postalCodeDataFilter(val) {
+		const wildcardFilter = vanillaPostalCodeFilter(val);
+		const res = $postalCodesStore.data.features?.filter(wildcardFilter);
+		return res;
+	}
+
 	let validInput = false;
 	$: validInput = /^\d{0,6}$/.test(displayedValue);
 	$: showError = touched && !validInput;
@@ -370,48 +446,64 @@
 	function resetView() {
 		map?.flyTo({ center: [103.8198, 1.3221], zoom: 10, bearing: 0, pitch: 0 });
 	}
-	$: if (displayedValue && validInput) {
-		handleInput(null);
+
+	function getZoomLevel(number) {
+		// Convert the number to a string to easily count its digits
+		const numStr = Math.abs(number).toString();
+
+		// Count the number of digits
+		const digitCount = numStr === '0' ? 0 : numStr.length;
+
+		// Calculate the zoom level
+		// Start at 10 for 0 digits, increase by 1.6 for each digit, max out at 18
+		const zoomLevel = Math.min(10 + digitCount * 1.6, 18);
+
+		// Round to one decimal place
+		return Math.round(zoomLevel * 10) / 10;
 	}
 
 	function handleInput(event) {
-		const shownVal = event?.target.value;
 		if (event) {
 			touched = true;
 		}
-		inputValue = displayedValue + '*';
-		// console.log(typeof displayedValue);
-		if (!validInput && touched) {
-			displayedValue; // Update the input field
-			// displayedValue = shownVal;
-		}
+		const input = event.target;
+		const newValue = input.value;
 
-		if (displayedValue.trim().length === 0) {
-			resetView();
-			// console.log(filterPostalCodeData.length);
-		} else {
-			if ((map && filterPostalCodeData.length > 0) || filterPostalCodeData.length === 1) {
-				if (displayedValue.length === 6) {
-					flyToFilteredPoints(18, 25, 35);
-					showHeatmap = false;
-				} else {
-					setTimeout(flyToFilteredPoints(), 0);
+		if (validInput) {
+			// displayedValue = shownVal;
+			inputValue = displayedValue + '*';
+			const numCodes = postalCodeDataFilter(inputValue);
+
+			if (displayedValue.trim().length === 0) {
+				resetView();
+			} else {
+				if (numCodes.length > 0) {
+					previousWorkingPostal = numCodes[0].properties.POSTAL;
+					if (numCodes.length < 6 && displayedValue.length > 4) {
+						flyToFilteredPoints({ zoom: 18, pitch: 25, bearing: 35, center: true });
+						showHeatmap = false;
+					} else {
+						showHeatmap = true;
+						setTimeout(
+							flyToFilteredPoints({ zoom: getZoomLevel(Number(displayedValue)), center: false }),
+							200
+						);
+					}
 				}
 			}
 		}
 	}
 
 	function checkZoomAndUpdate() {
-		if (map.getZoom() >= BUILDING_ZOOM_START && filterPostalCodeData) {
-			updateBuildingColors();
+		if (map.getZoom() >= BUILDING_ZOOM_START && inputValue && filterPostalCodeData.length < 12) {
+			updateBuildingColors(filterPostalCodeData);
 		}
 	}
 
 	let filteredPolygons;
 
-	function updateBuildingColors() {
-		if (!map || !filterPostalCodeData) return;
-
+	function updateBuildingColors(data) {
+		if (!map || !data) return;
 		const features = map.querySourceFeatures('maptiler_planet', {
 			sourceLayer: 'building'
 		});
@@ -429,7 +521,7 @@
 				building.geometry.coordinates.forEach((polygonCoords, polygonIndex) => {
 					const polygon = turf.rewind(turf.polygon(polygonCoords));
 					const bufferedPolygon = turf.buffer(polygon, 0.5, { units: 'meters' });
-					const containingPoint = filterPostalCodeData.find((pointFeature) => {
+					const containingPoint = data.find((pointFeature) => {
 						if (pointFeature.geometry.type !== 'Point') {
 							console.warn(
 								'Unexpected geometry type in filterPostalCodeData:',
@@ -540,135 +632,9 @@
 		}
 		// Update filteredPolygons to include SVG data
 	}
-
-	$: planningAreasCenters = planningAreasData ? calculateCenters(planningAreasData) : null;
+	$: planningAreasCenters = $planningAreasData ? calculateCenters($planningAreasData) : null;
 	// END EXTRACT
-
-	function formatValue(value) {
-		if (typeof value === 'string' && value.length > 50) {
-			return value.substring(0, 47) + '...';
-		}
-		return value;
-	}
 </script>
-
-<!-- 
-<div class="flex flex-col lg:flex-row h-screen p-4 space-y-4 lg:space-y-0 lg:space-x-4"> -->
-<!-- <div class="w-full lg:w-1/4 h-1/2 lg:h-auto">
-		<div class="bg-white shadow-md rounded px-4 py-4 h-full overflow-y-auto">
-			<h2 class="text-xl font-bold">Singapore Postal Code Explorer</h2>
-			<p class="text-sm text-gray-600 italic mb-4">
-				Explore {postalCodesData?.features.length} Singapore Postal Codes
-			</p>
-
-			<p class="text-sm mb-4">
-				Since 1995, Postal Codes in Singapore uses a six digit format which is administered by
-				Singapore Post.
-			</p>
-			<div>
-				<h3 class="text-lg font-semibold mb-2">Postal Code Filter</h3>
-				<input
-					type="text"
-					class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 text-sm leading-tight focus:outline-none focus:shadow-outline mb-8"
-					placeholder="Enter a 6 digit postal code"
-					bind:value={inputValue}
-					on:input={handleInput}
-				/>
-
-				{#if showError}
-					<p class="text-red-500 text-xs italic mt-1">Please enter up to 6 digits only.</p>
-				{/if}
-			</div>
-			<label class="flex items-center">
-				<input
-					type="checkbox"
-					bind:checked={debugMode}
-					class="form-checkbox h-5 w-5 text-blue-600"
-				/>
-				<span class="ml-2 text-sm">Enable Dev Mode</span>
-			</label>
-			{#if debugMode}
-				<h2 class="text-xl font-bold mb-4 mt-6">Dev Mode</h2>
-				<div class="space-y-4">
-					<div>
-						<h3 class="text-lg font-semibold mb-2">Filters</h3>
-						<label class="flex items-center">
-							<input
-								type="checkbox"
-								bind:checked={filterPlanningAreas}
-								class="form-checkbox h-5 w-5 text-blue-600"
-							/>
-							<span class="ml-2 text-sm">Only show PlanningAreas starting with 'T'</span>
-						</label>
-					</div>
-					<h2 class="text-xl font-bold mb-4">Debug Mode</h2>
-					<div>
-						<h3 class="text-lg font-semibold mb-2">Map Information</h3>
-						<p class="text-sm">Zoom level: <span class="font-bold">{currentZoom}</span></p>
-					</div>
-
-					<div>
-						<h3 class="text-lg font-semibold mb-2">Layer Information</h3>
-						<p class="text-sm">
-							Filtered Postal Codes <span class="font-bold">{filterPostalCodeData?.length}</span>
-						</p>
-					</div>
-					<h2 class="text-xl font-bold mb-4">Map Options</h2>
-					<div>
-						<h3 class="text-lg font-semibold mb-2">Layer Visibility</h3>
-						<div class="space-y-2">
-							<label class="flex items-center">
-								<input
-									type="checkbox"
-									bind:checked={showFill}
-									class="form-checkbox h-5 w-5 text-blue-600"
-								/>
-								<span class="ml-2">Show fill</span>
-							</label>
-							<label class="flex items-center">
-								<input
-									type="checkbox"
-									bind:checked={showBorder}
-									class="form-checkbox h-5 w-5 text-blue-600"
-								/>
-								<span class="ml-2">Show border</span>
-							</label>
-							<label class="flex items-center">
-								<input
-									type="checkbox"
-									bind:checked={showClusterCircles}
-									class="form-checkbox h-5 w-5 text-blue-600"
-								/>
-								<span class="ml-2">Show clusters</span>
-							</label>
-							<label class="flex items-center">
-								<input
-									type="checkbox"
-									bind:checked={showClusterCounts}
-									class="form-checkbox h-5 w-5 text-blue-600"
-								/>
-								<span class="ml-2">Show cluster counts</span>
-							</label>
-						</div>
-					</div>
-
-					<div>
-						<h3 class="text-lg font-semibold mb-2">Color Settings</h3>
-						<div class="space-y-2">
-							<label class="flex items-center justify-between">
-								<span>Fill:</span>
-								<input type="color" bind:value={fillColor} class="form-input" />
-							</label>
-							<label class="flex items-center justify-between">
-								<span>Border:</span>
-								<input type="color" bind:value={borderColor} class="form-input" />
-							</label>
-						</div>
-					</div>
-				</div>
-			{/if}
-		</div>
-	</div> -->
 
 <Section>
 	<h2>Topology of Singapore Postal Codes</h2>
@@ -679,12 +645,13 @@
 		divided.
 	</p>
 	<p class="mb">
-		This small microsite illustrates Singapore's postal code system and is inspired by Ben Fry's
+		This small visualization illustrates Singapore's postal code system and is inspired by Ben Fry's
 		<a href="https://benfry.com/zipdecode/">zipdecode</a>.
 	</p>
-
-	<h3>Acknowledgements</h3>
-	<ol>
+	<p class="mb">Scroll down to learn more!</p>
+	<p class="text-small">Acknowledgements</p>
+	<!-- <h3 class="text-small">Acknowledgements</h3> -->
+	<ol class="text-small" style="padding-left: 20px; margin-left: 0; padding-bottom:10px">
 		<li>
 			Postal Code Data sourced from <a href="https://www.onemap.gov.sg/">onemap</a>
 		</li>
@@ -707,6 +674,7 @@
 		</li>
 	</ol>
 </Section>
+
 {#if $postalCodesStore.loading}
 	<div class="loading-container">
 		<div class="loading-spinner"></div>
@@ -716,7 +684,7 @@
 	<p>Error: {$postalCodesStore.error}</p>
 	<!-- <button on:click={loadData}>Try Again</button> -->
 {:else if $postalCodesStore.data}
-	<Scroller {threshold} bind:id={mapSectionId} bind:progress={progressValue}>
+	<Scroller {threshold} bottom={0.95} bind:id={mapSectionId} bind:progress={progressValue}>
 		<div slot="background">
 			<div class="col-full height-full">
 				<MapLibre
@@ -728,6 +696,7 @@
 					zoom={currentZoom}
 					interactive={explore}
 					antialias={true}
+					zoomOnDoubleClick={false}
 					on:zoomend={handleZoomEnd}
 					on:zoom={() => {
 						const zoomdist = map.getZoom();
@@ -750,8 +719,6 @@
 										'fill-color': hoverStateFilter(fillColor, colors.hoverBgColor),
 										'fill-opacity': 0.5
 									}}
-									manageHoverState={true}
-									on:mousemove={({ detail }) => (hoverArea = detail.features[0].properties.name)}
 								></FillLayer>
 							{/if}
 							{#if showBorder}
@@ -760,39 +727,26 @@
 									paint={{ 'line-color': borderColor, 'line-width': 0.7 }}
 								/>
 							{/if}
+							<GeoJSON id="planning-areas-centers" data={planningAreasCenters} promoteId="district">
+								<SymbolLayer
+									paint={{
+										'text-color': '#010',
+										'text-halo-color': '#fff',
+										'text-halo-width': 1.5,
+										'text-halo-blur': 1
+									}}
+									layout={{
+										'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+										'text-allow-overlap': false,
+										'text-field': ['get', 'district'],
+										'text-size': zoomTransition(6, 10, 15, 18),
+										'text-offset': [0, 0]
+										// 'text-anchor': 'left'
+									}}
+								/>
+							</GeoJSON>
 						</GeoJSON>
 					{/if}
-
-					<!-- extrude specific polygons -->
-
-					<!-- <FillExtrusionLayer
-						id="building-extrusions"
-						source="containing-polygons"
-						minzoom={14}
-						paint={{
-							'fill-extrusion-color': '#ff0000',
-							'fill-extrusion-height': [
-								'interpolate',
-								['linear'],
-								['zoom'],
-								14,
-								0,
-								14.05,
-								['get', 'render_height']
-							],
-							'fill-extrusion-base': [
-								'interpolate',
-								['linear'],
-								['zoom'],
-								14,
-								0,
-								14.05,
-								['get', 'render_min_height']
-							],
-							'fill-extrusion-opacity': 0.6
-						}}
-					/> -->
-
 					{#if showHeatmap}
 						<GeoJSON
 							id="postal-codes"
@@ -853,40 +807,6 @@
 								<SymbolLayer applyToClusters={false} source="postal-codes" filter={filterPostalCode}
 								></SymbolLayer>
 							{/if} -->
-						</GeoJSON>
-
-						<GeoJSON id="planning-areas-centers" data={planningAreasCenters} promoteId="name">
-							<SymbolLayer
-								paint={{
-									'text-color': '#010',
-									'text-halo-color': '#fff',
-									'text-halo-width': 1.5,
-									'text-halo-blur': 1
-								}}
-								layout={{
-									'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-									'text-allow-overlap': false,
-									'text-field': ['get', 'name'],
-									'text-size': zoomTransition(6, 10, 15, 18),
-									'text-offset': [0, 1.5],
-									'text-anchor': 'top'
-								}}
-							/>
-							<!-- <SymbolLayer
-								paint={{
-									'text-color': 'transparent',
-									'text-halo-color': 'rgba(255, 255, 255, 0.75)',
-									'text-halo-width': 2
-								}}
-								layout={{
-									'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-									'text-allow-overlap': false,
-									'text-field': ['get', 'name'],
-									'text-size': zoomTransition(6, 10, 15, 18),
-									'text-offset': [0, 1.5],
-									'text-anchor': 'top'
-								}}
-							/> -->
 						</GeoJSON>
 					{/if}
 
@@ -985,15 +905,15 @@
 						{/if}
 					</GeoJSON>
 				</MapLibre>
-				{#if showInputOverlay && progressValue > 0.9999}
+				{#if showInputOverlay && progressValue > 0.95}
 					<div class="map-overlay top" transition:fade={{ delay: 250, duration: 300 }}>
 						<div class="map-overlay-inner">
-							<h3 class="text-big" style="margin-bottom: 30px;">Postal Code Explorer</h3>
+							<h3 class="text-big" style="margin-bottom: 15px;">Postal Code Explorer</h3>
 							<input
 								type="text"
 								placeholder="Enter a 6 digit postal code"
 								bind:value={displayedValue}
-								on:input={handleInput}
+								on:input={debouncedHandleInput}
 							/>
 
 							{#if showError}
@@ -1001,11 +921,13 @@
 							{:else if displayedValue.length > 6}
 								<p class=" error">Postal codes have only 6 digits.</p>
 							{:else if filterPostalCodeData.length === 0}
-								<p class=" error">Can't find that postal code, try removing entries</p>
+								<p class=" error">
+									Can't find that postal code, try removing entries or try {previousWorkingPostal}
+								</p>
 							{/if}
 
 							<p style="margin-top: 5px">
-								<Em>{filterPostalCodeData.length}</Em> Postal Codes are shown.
+								<Em color="#206095">{filterPostalCodeData.length}</Em> Postal Codes are currently shown.
 							</p>
 						</div>
 					</div>
@@ -1018,32 +940,33 @@
 			<section data-id="map02">
 				<div class="col-medium">
 					<p>
-						Beginning in the 1950s, Singapore was originally split into <Em>28</Em> Postal Districts.
+						Beginning in the 1950s, Singapore was originally split into <Em color="#206095">28</Em> Postal
+						Districts.
 					</p>
 				</div>
 			</section>
 			<section data-id="map03">
 				<div class="col-medium">
 					<p>
-						Since September 1995, the postal code uses a <Em>6</Em> digit system which divides Singapore
-						into 80 postal sectors.
+						Fast forward to September 1995, the postal code uses a <Em color="#206095">6</Em> digit system
+						which divides Singapore into 80 postal sectors.
 					</p>
 					<p>
-						<Em>{$postalCodesStore.data.features.length}</Em> postal codes are displayed on this map
-						to illustrate its distribution.
+						<Em color="#206095">{$postalCodesStore.data.features.length}</Em> postal codes are displayed
+						on this map to illustrate its distribution.
 					</p>
 				</div>
 			</section>
 			<section data-id="map04">
 				<div class="col-medium">
-					<p>The 6 digit postal code system works as follows:</p>
-					<h2><Em>54</Em><span color="grey">2264</span></h2>
+					<p>Singapore's 6 digit postal code system works as follows:</p>
+					<h2><Em color="#003C57">54</Em><span color="grey">2264</span></h2>
 					<p>The first two digits of each postal code denote a postal sector.</p>
 				</div>
 			</section>
 			<section data-id="map05">
 				<div class="col-medium">
-					<h2>542<Em>264</Em></h2>
+					<h2>542<Em color="#003C57">264</Em></h2>
 					<p>
 						The last 3 digits are used to indicate residential properties in an apartment block.
 					</p>
@@ -1052,7 +975,7 @@
 			<section data-id="map06">
 				<div class="col-medium">
 					<h2>
-						54<Em>2</Em>264
+						54<Em color="#003C57">2</Em>264
 					</h2>
 					<p>
 						For residential blocks that share the same number, the 3rd digit is used to
@@ -1063,7 +986,7 @@
 			<section data-id="map07">
 				<div class="col-medium">
 					<h2>
-						54<Em>&ltdigit&gt;</Em>264
+						54<Em color="#003C57"><Counter></Counter></Em>264
 					</h2>
 					<p>
 						Within the same postal sector, postal codes are given out based on street names, from A
@@ -1079,10 +1002,12 @@
 				</div>
 			</section>
 			<section data-id="map08">
-				<div class="col-medium">
-					<h2>Try it yourself</h2>
-					<p>Enter a postal code to explore the map.</p>
-				</div>
+				{#if progressValue < 0.95}
+					<div class="col-medium">
+						<h2>Try it yourself!</h2>
+						<p>Scroll below to try some postal codes!</p>
+					</div>
+				{/if}
 			</section>
 		</div>
 	</Scroller>
@@ -1107,17 +1032,6 @@
 	}
 	select {
 		max-width: 350px;
-	}
-
-	.fill-overlay {
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		bottom: 0;
-		background-size: 50px 50px;
-		animation: 6s;
-		pointer-events: none;
 	}
 
 	@keyframes spin {
@@ -1169,24 +1083,7 @@
 		font-weight: 500;
 		color: #1f2937; /* This is equivalent to Tailwind's text-gray-800 */
 	}
-	table {
-		border-collapse: collapse;
-		width: 100%;
-	}
-	th,
-	td {
-		border: 1px solid #ddd;
-		padding: 8px;
-		text-align: left;
-		font-size: 12px;
-	}
-	th {
-		background-color: #f2f2f2;
-	}
-	ul {
-		margin: 0;
-		padding-left: 20px;
-	}
+
 	.property-value {
 		display: inline-block;
 		max-width: 200px;
@@ -1197,12 +1094,36 @@
 	}
 
 	.map-overlay {
-		font: 12px/20px;
+		font-size: 16px;
+		line-height: 1.5;
 		position: absolute;
-		width: 400px;
-		top: 5%;
-		left: 50px;
+		width: 60%;
+		max-width: 400px;
+		bottom: 10%;
+		left: 20px;
 		padding: 10px;
+		box-sizing: border-box;
+	}
+
+	@supports (-webkit-touch-callout: none) {
+		.map-overlay {
+			/* top: auto; */
+			bottom: 20px;
+			left: 20px;
+			width: calc(100% - 40px);
+			max-width: none;
+		}
+	}
+
+	@media (max-width: 844px) and (orientation: portrait),
+		(max-width: 926px) and (orientation: landscape) {
+		.map-overlay {
+			/* top: auto; */
+			bottom: 20px;
+			left: 20px;
+			width: calc(100% - 40px);
+			max-width: none;
+		}
 	}
 
 	.map-overlay .map-overlay-inner {
@@ -1214,14 +1135,40 @@
 	}
 
 	.map-overlay-inner h3 {
-		padding: 0px;
+		padding: 0;
 		margin-bottom: 10px;
 		margin-top: 10px;
 	}
+
 	.error {
 		color: red;
-		font-size: smaller;
+		font-size: 0.9em;
 		font-style: italic;
 		margin-top: 5px;
+	}
+
+	/* Safari-specific styles */
+	@supports (-webkit-overflow-scrolling: touch) {
+		.map-overlay {
+			-webkit-overflow-scrolling: touch;
+		}
+	}
+
+	/* Media query for smaller viewports */
+	@media screen and (max-width: 600px) {
+		.map-overlay {
+			width: 95%;
+			left: 2.5%;
+			right: 2.5%;
+			top: 2%;
+		}
+
+		.map-overlay-inner {
+			padding: 8px;
+		}
+
+		.map-overlay-inner h3 {
+			font-size: 14px;
+		}
 	}
 </style>
