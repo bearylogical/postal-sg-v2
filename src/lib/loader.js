@@ -1,33 +1,46 @@
-import { writable } from 'svelte/store';
+import { writable, derived } from 'svelte/store';
 
 export const createGeoJsonLoader = (initialValue = null) => {
-    const { subscribe, set } = writable(initialValue);
+    const data = writable(initialValue);
     const error = writable(null);
+    const loading = writable(false);
 
     const loadGeoJson = async (url) => {
+        loading.set(true);
+        error.set(null);
+
         try {
             const response = await fetch(url);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            const data = await response.json();
+            const jsonData = await response.json();
 
             // Ensure the loaded data is a valid FeatureCollection
-            if (data.type !== 'FeatureCollection' || !Array.isArray(data.features)) {
+            if (jsonData.type !== 'FeatureCollection' || !Array.isArray(jsonData.features)) {
                 throw new Error('Invalid GeoJSON: Not a FeatureCollection');
             }
 
-            set(data);
-            error.set(null);
+            data.set(jsonData);
         } catch (e) {
             error.set(`Failed to load GeoJSON: ${e.message}`);
-            set(null);
+            data.set(null);
+        } finally {
+            loading.set(false);
         }
     };
 
+    const state = derived(
+        [data, loading, error],
+        ([$data, $loading, $error]) => ({
+            data: $data,
+            loading: $loading,
+            error: $error
+        })
+    );
+
     return {
-        subscribe,
+        subscribe: state.subscribe,
         load: loadGeoJson,
-        error: { subscribe: error.subscribe }
     };
 };

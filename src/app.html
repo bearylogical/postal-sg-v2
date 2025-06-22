@@ -3,9 +3,43 @@
 <head>
 	<meta charset="utf-8" />
 	<link rel="icon" href="%sveltekit.assets%/favicon.png" />
+	<title>Topology of Singapore Postal Codes | Bearylogical</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<meta property="og:title" content="Topology of Singapore Postal Codes | Bearylogical">
+	<meta property="og:description" content="A short explainer on Singapore's postal codes">
+	<meta property="og:image" content="%sveltekit.assets%/web_thumb.png">
+	<meta property="og:url" content="https://stories.bearylogical.net/postal-sg/index.html">
+	<meta property="og:type" content="website">
 	%sveltekit.head%
 </head>
+<script>
+	const addMaximumScaleToMetaViewport = () => {
+		const el = document.querySelector('meta[name=viewport]');
+
+		if (el !== null) {
+			let content = el.getAttribute('content');
+			let re = /maximum\-scale=[0-9\.]+/g;
+
+			if (re.test(content)) {
+				content = content.replace(re, 'maximum-scale=1.0');
+			} else {
+				content = [content, 'maximum-scale=1.0'].join(', ')
+			}
+
+			el.setAttribute('content', content);
+		}
+	};
+
+	const disableIosTextFieldZoom = addMaximumScaleToMetaViewport;
+
+	// https://stackoverflow.com/questions/9038625/detect-if-device-is-ios/9039885#9039885
+	const checkIsIOS = () =>
+		/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+	if (checkIsIOS()) {
+		disableIosTextFieldZoom();
+	}
+</script>
 <body data-sveltekit-preload-data="hover">
 	<div class="h-full w-full overflow-auto">%sveltekit.body%</div>
 </body>
