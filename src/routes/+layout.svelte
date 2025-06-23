@@ -8,3 +8,5 @@
 	let theme = 'light';
 	setContext('theme', themes[theme]);
 </script>
+
+<slot />
