@@ -637,7 +637,7 @@
 </script>
 
 <Section>
-	<h2>Topology of Singapore Postal Codes</h2>
+	<h2>Topography of Singapore Postal Codes</h2>
 	<p class="text-muted text-small">01 September 2024 // bearylogical</p>
 	<p class="mb">
 		Singapore's postal code system not only aids mail delivery but also offers a unique view of the
@@ -663,13 +663,13 @@
 			>
 		</li>
 		<li>
-			Wikipedia Explanation of <a href="https://github.com/ONSvisual/sk-scrolly/tree/main"
+			Wikipedia Explanation of <a href="https://en.wikipedia.org/wiki/Postal_codes_in_Singapore"
 				>Singapore Postal Code
 			</a>system
 		</li>
 		<li>
 			Scroller implmentation adapted from UK's Office of National Statistics <a
-				href="https://en.wikipedia.org/wiki/Postal_codes_in_Singapore">scrolly template</a
+				href="https://github.com/ONSvisual/sk-scrolly/tree/main">scrolly template</a
 			>
 		</li>
 	</ol>
