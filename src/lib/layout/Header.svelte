@@ -1,15 +1,28 @@
-<script>
+<script lang="ts">
 	import { themes } from '$lib/config.js';
 	import { getContext } from 'svelte';
 
-	export let theme = getContext('theme');
-	export let bgimage = null;
-	export let bgcolor = null;
-	export let bgfixed = false;
-	export let center = true;
-	export let short = false;
+	interface Props {
+		theme?: any;
+		bgimage?: any;
+		bgcolor?: any;
+		bgfixed?: boolean;
+		center?: boolean;
+		short?: boolean;
+		children?: import('svelte').Snippet;
+	}
 
-	let style = '';
+	let {
+		theme = getContext('theme'),
+		bgimage = null,
+		bgcolor = null,
+		bgfixed = false,
+		center = true,
+		short = false,
+		children
+	}: Props = $props();
+
+	let style = $state('');
 
 	if (bgimage) {
 		style += `background-image: url(${bgimage});`;
@@ -30,7 +43,7 @@
 		class:height-full={!short}
 	>
 		<div class:center>
-			<slot></slot>
+			{@render children?.()}
 		</div>
 	</div>
 </header>

@@ -1,4 +1,5 @@
-<script context="module">
+<!-- @migration-task Error while migrating Svelte code: This migration would change the name of a slot (background to background_1) making the component unusable -->
+<script module>
 	// Based on svelte-scroller by Rich Harris
 	// https://github.com/sveltejs/svelte-scroller
 	// Patched to transpile to IE 11 and allow for split-screen view option
@@ -228,8 +229,8 @@
 	svelte-scroller-background-container {
 		display: block;
 		position: absolute;
-		width: 100%;
-		max-width: 100%;
+		/* width: 100%; */
+		/* max-width: 100%; */
 		pointer-events: none;
 		/* height: 100%; */
 

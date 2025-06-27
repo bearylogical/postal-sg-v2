@@ -1,12 +1,12 @@
-<script>
+<script lang="ts">
 	import { themes } from '$lib/config.js';
 	import { getContext } from 'svelte';
 
-	export let theme = getContext('theme');
+	let { theme = getContext('theme'), children } = $props();
 </script>
 
 <section style="color: {theme['text']}; background-color: {theme['background']}">
 	<div class="col-medium">
-		<slot></slot>
+		{@render children?.()}
 	</div>
 </section>

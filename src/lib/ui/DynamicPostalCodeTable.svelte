@@ -1,5 +1,5 @@
-<script>
-	export let filterPostalCodeData = [];
+<script lang="ts">
+	let { filterPostalCodeData = [] } = $props();
 
 	function formatValue(value) {
 		if (typeof value === 'string' && value.length > 50) {
@@ -21,7 +21,7 @@
 		return formatValue(feature.properties[header] || 'N/A');
 	}
 
-	$: headers = getHeaders(filterPostalCodeData);
+	let headers = $derived(getHeaders(filterPostalCodeData));
 </script>
 
 {#if filterPostalCodeData.length > 0}

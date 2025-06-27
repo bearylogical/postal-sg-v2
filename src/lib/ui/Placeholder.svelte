@@ -1,6 +1,10 @@
-<script>
-	export let loading = true;
-	export let content = '';
+<script lang="ts">
+	interface Props {
+		loading?: boolean;
+		content?: string;
+	}
+
+	let { loading = true, content = '' }: Props = $props();
 </script>
 
 {#if loading}

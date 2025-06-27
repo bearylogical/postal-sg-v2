@@ -1,11 +1,22 @@
-<script>
+<script lang="ts">
 	import { themes } from '../config.js';
 	import { getContext } from 'svelte';
 
-	export let theme = getContext('theme');
-	export let center = true;
-	export let wide = false;
-	export let short = false;
+	interface Props {
+		theme?: any;
+		center?: boolean;
+		wide?: boolean;
+		short?: boolean;
+		children?: import('svelte').Snippet;
+	}
+
+	let {
+		theme = getContext('theme'),
+		center = true,
+		wide = false,
+		short = false,
+		children
+	}: Props = $props();
 </script>
 
 <section style="color: {theme['text']}; background-color: {theme['background']};">
@@ -17,7 +28,7 @@
 		class:height-full={!short}
 		class:short
 	>
-		<slot></slot>
+		{@render children?.()}
 	</div>
 </section>
 

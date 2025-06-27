@@ -1,7 +1,12 @@
-<script>
+<script lang="ts">
 	import { setContext } from 'svelte';
 	import '../app.css';
 	import { themes } from '$lib/config';
+	interface Props {
+		children?: import('svelte').Snippet;
+	}
+
+	let { children }: Props = $props();
 
 	// STYLE CONFIG
 	// Set theme globally (options are 'light' or 'dark')
@@ -9,4 +14,4 @@
 	setContext('theme', themes[theme]);
 </script>
 
-<slot />
+{@render children?.()}

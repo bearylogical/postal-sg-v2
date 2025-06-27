@@ -1,8 +1,8 @@
 <script>
 	import { onMount } from 'svelte';
 
-	let counter = 0;
-	let isVisible = true;
+	let counter = $state(0);
+	let isVisible = $state(true);
 
 	function updateCounter() {
 		isVisible = false;
