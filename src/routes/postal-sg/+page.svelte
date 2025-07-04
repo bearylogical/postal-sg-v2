@@ -1,5 +1,3 @@
-<!-- @migration-task Error while migrating Svelte code: can't migrate `$: colors = contrastingColor(fillColor);` to `$derived` because there's a variable named derived.
-     Rename the variable and try again or migrate by hand. -->
 <script lang="ts">
 	import {
 		MapLibre,
@@ -18,36 +16,37 @@
 	import Scroller from '$lib/layout/Scroller.svelte';
 	import { contrastingColor } from '$lib/colors.js';
 	import { onMount } from 'svelte';
-	import { derived } from 'svelte/store';
 	import { planningAreasStore, postalCodesStore } from '$lib/stores';
 	import { streetsStyle } from '$lib/styles';
 	import Em from '$lib/ui/Em.svelte';
 	import { fade } from 'svelte/transition';
 	import Counter from '$lib/ui/Counter.svelte';
+	// import '.css';
 
-	let planningAreasData;
-	let postalCodesData;
-	let planningAreasError;
-	let postalCodesError;
+	let planningAreasData = $state([]);
+	let postalCodesData = $state([]);
+	let planningAreasError = $state();
+	let postalCodesError = $state();
 
 	const planningareas = 'https://data.bearylogical.net/singapore_districts.geojson';
 	const postalcodes = 'https://data.bearylogical.net/singpostcode.geojson';
+
 	//states
+	let showBorder = $state(true);
+	let showFill = $state(true);
+	let showClusterCircles = $state(false);
+	let showClusterCounts = $state(false);
+	let showPostalInfo = $state(false);
+	let fillColor = $state('#006000');
+	let borderColor = $state('#003300');
+	let debugMode = $state<boolean>();
+	let explore = $state(false); // map interactivity on/off
+	let showHeatmap = $state(false);
+	let showDistricts = $state(false);
 
-	let showBorder = true;
-	let showFill = true;
-	let showClusterCircles = false;
-	let showClusterCounts = false;
-	let showPostalInfo = false;
-	let fillColor = '#006000';
-	let borderColor = '#003300';
-	let debugMode: boolean;
-	let explore = false; // map interactivity on/off
-	let showHeatmap = false;
-	let showDistricts = false;
-
+	let displayedValue = $state('');
 	// Variables to hold visible section IDs of Scroller components
-	let mapSectionId: string | null = null;
+	let mapSectionId = $state<string | null>(1);
 
 	// CONFIG FOR SCROLLER COMPONENTS
 	// Config
@@ -154,39 +153,56 @@
 	}
 
 	// Code to run Scroller actions when new caption IDs come into view
-	function runActions(sectionId, actions) {
-		if (actions[sectionId]) actions[sectionId]();
+	$effect(() => {
+		if (mapSectionId) {
+			runActions(mapSectionId, actions.map);
+		}
+	});
+	function runActions(sectionId: string, actions: Map<string, () => void>) {
+		const _mapSectionId: string = 'map0' + (parseInt(sectionId, 10) + 1);
+		// console.log('Running action for section:', _mapSectionId);
+		if (actions[_mapSectionId]) {
+			actions[_mapSectionId]();
+		}
 	}
-	$: mapSectionId && runActions(mapSectionId, actions.map);
 
 	// START EXTRACT
-	let map: maplibregl.Map | undefined;
-	let loaded: boolean;
-	let touched = false;
-	let showInputOverlay = false;
-	let progressValue: number = 0;
+	let map = $state<maplibregl.Map | undefined>();
+	let loaded = $state<boolean>();
+	let touched = $state(false);
+	let showInputOverlay = $state(false);
+	let progressValue = $state<number>(0);
 
-	let textLayers: maplibregl.LayerSpecification[] = [];
-	let hoverArea: Record<string, any> | null = null;
-	$: if (map && loaded) {
-		textLayers = map.getStyle().layers.filter((layer) => layer['source-layer'] === 'place');
-	}
-	let planningAreasCenters = null;
-	let error = null;
-	let currentZoom = 10;
-	let inputValue: string | null = null;
-	let filterPostalCodeData: Array | null = null;
-	let previousWorkingPostal: string = null;
+	let textLayers = $state<maplibregl.LayerSpecification[]>([]);
+	let hoverArea = $state<Record<string, any> | null>(null);
+
+	$effect(() => {
+		if (map && loaded) {
+			textLayers = map.getStyle().layers.filter((layer) => layer['source-layer'] === 'place');
+		}
+	});
+
+	let planningAreasCenters = $state(null);
+	let error = $state(null);
+	let currentZoom = $state(10);
+	let inputValue = $state<string | null>(null);
+	let filterPostalCodeData = $state<Array | null>(null);
+	let previousWorkingPostal = $state<string>(null);
 
 	const BUILDING_ZOOM_START = 15;
+
 	onMount(() => {
 		planningAreasStore.load(planningareas);
-		planningAreasData = derived(
-			planningAreasStore,
-			($planningAreasStore) => $planningAreasStore.data
-		);
 		postalCodesStore.load(postalcodes);
-		postalCodesData = derived(postalCodesStore, ($postalCodesStore) => $postalCodesStore.data);
+	});
+
+	// Update data from stores
+	$effect(() => {
+		planningAreasData = $planningAreasStore.data;
+	});
+
+	$effect(() => {
+		postalCodesData = $postalCodesStore.data;
 	});
 
 	function calculateCenters(g: FeatureCollection): FeatureCollection {
@@ -253,6 +269,7 @@
 			});
 		}
 	}
+
 	function calculateBounds(features) {
 		if (!features || features.length === 0) return null;
 
@@ -279,8 +296,10 @@
 			[bounds.maxLng, bounds.maxLat]
 		];
 	}
-
-	$: filterPostalCodeData = inputValue ? postalCodeDataFilter(inputValue) : [];
+	// $effect(() => console.log('progressValue', filterPostalCodeData));
+	$effect(() => {
+		filterPostalCodeData = inputValue ? postalCodeDataFilter(inputValue) : [];
+	});
 
 	function calculateCentroid(input: FeatureCollection | Feature[]): Feature<Point> {
 		let featureCollection: FeatureCollection;
@@ -304,6 +323,7 @@
 		// Return the center as a GeoJSON Feature
 		return centroid;
 	}
+
 	function flyToFilteredPoints({ zoom = 18, pitch = 0, bearing = 0, center = false }) {
 		if (filterPostalCodeData.length > 0) {
 			const bounds = calculateBounds(filterPostalCodeData);
@@ -312,21 +332,25 @@
 			}
 			if (center) {
 				const centers = calculateCentroid(filterPostalCodeData);
-				map?.flyTo({ center: centers.geometry.coordinates, zoom, pitch, bearing });
+				map?.flyTo({ center: centers.geometry.coordinates, zoom, pitch, bearing, speed: 1 });
 			}
 		}
 	}
 
-	$: colors = contrastingColor(fillColor);
-	$: if (map && loaded) {
-		for (let layer of textLayers) {
-			map.setPaintProperty(layer.id, 'text-color', colors.textColor);
-			map.setPaintProperty(layer.id, 'text-halo-color', colors.textOutlineColor);
-		}
-	}
+	let colors = $derived(contrastingColor(fillColor));
 
-	let filterPlanningAreas = false;
+	$effect(() => {
+		if (map && loaded) {
+			for (let layer of textLayers) {
+				map.setPaintProperty(layer.id, 'text-color', colors.textColor);
+				map.setPaintProperty(layer.id, 'text-halo-color', colors.textOutlineColor);
+			}
+		}
+	});
+
+	let filterPlanningAreas = $state(false);
 	// $: filter = filterPlanningAreas ? ['==', 'T', ['slice', ['get', 'Attributes'], 0, 1]] : undefined;
+
 	function createPostalFilter(pattern) {
 		if (pattern.includes('*')) {
 			const parts = pattern.split('*');
@@ -413,11 +437,13 @@
 		const {
 			detail: { map }
 		} = event;
+		console.log('Zoom level changed:', map.getZoom());
 		currentZoom = map.getZoom();
+
 		checkZoomAndUpdate();
 	}
 
-	$: filterPostalCode = inputValue ? createPostalFilter(inputValue) : null;
+	let filterPostalCode = $derived(inputValue ? createPostalFilter(inputValue) : null);
 
 	function debounce(func, wait) {
 		let timeout;
@@ -439,11 +465,8 @@
 		return res;
 	}
 
-	let validInput = false;
-	$: validInput = /^\d{0,6}$/.test(displayedValue);
-	$: showError = touched && !validInput;
-
-	let displayedValue = '';
+	let validInput = $derived(/^\d{0,6}$/.test(displayedValue));
+	let showError = $derived(touched && !validInput);
 
 	function resetView() {
 		map?.flyTo({ center: [103.8198, 1.3221], zoom: 10, bearing: 0, pitch: 0 });
@@ -502,7 +525,7 @@
 		}
 	}
 
-	let filteredPolygons;
+	let filteredPolygons = $state();
 
 	function updateBuildingColors(data) {
 		if (!map || !data) return;
@@ -634,12 +657,26 @@
 		}
 		// Update filteredPolygons to include SVG data
 	}
-	$: planningAreasCenters = $planningAreasData ? calculateCenters($planningAreasData) : null;
+
+	$effect(() => {
+		planningAreasCenters = planningAreasData ? calculateCenters(planningAreasData) : null;
+	});
+
 	// END EXTRACT
 </script>
 
+<svelte:head>
+	<title>Topography of Singapore Postal Codes</title>
+	<meta name="description" content="This is where the description goes for SEO" />
+	<meta property="og:title" content="Topography of Singapore Postal Codes | Bearylogical" />
+	<meta property="og:description" content="A short explainer on Singapore's postal codes" />
+	<meta property="og:image" content="%sveltekit.assets%/web_thumb.png" />
+	<meta property="og:url" content="https://stories.bearylogical.net/postal-sg/index.html" />
+	<meta property="og:type" content="website" />
+</svelte:head>
+
 <Section>
-	<h2>Topology of Singapore Postal Codes</h2>
+	<h2>Topography of Singapore Postal Codes</h2>
 	<p class="text-muted text-small">01 September 2024 // bearylogical</p>
 	<p class="mb">
 		Singapore's postal code system not only aids mail delivery but also offers a unique view of the
@@ -685,158 +722,163 @@
 {:else if $postalCodesStore.error}
 	<p>Error: {$postalCodesStore.error}</p>
 	<!-- <button on:click={loadData}>Try Again</button> -->
-{:else if $postalCodesStore.data}
-	<Scroller {threshold} bottom={0.95} bind:id={mapSectionId} bind:progress={progressValue}>
-		<div slot="background">
-			<div class="col-full height-full">
-				<MapLibre
-					bind:map
-					bind:loaded
-					style={streetsStyle}
-					standardControls={explore}
-					center={[103.8198, 1.3221]}
-					zoom={currentZoom}
-					interactive={explore}
-					antialias={true}
-					zoomOnDoubleClick={false}
-					on:zoomend={handleZoomEnd}
-					on:zoom={() => {
-						const zoomdist = map.getZoom();
-						map.setPaintProperty(
-							'building-extrusions',
-							'fill-extrusion-opacity',
-							Math.min(1, Math.max(0, (zoomdist - BUILDING_ZOOM_START) / 2))
-						); // Fade in between zoom 14-16
-					}}
-					filterLayers={(l) => {
-						// Hide the built-in 3D building layer since we're doing our own.
-						return l.id !== 'building-3d';
-					}}
-				>
-					{#if showDistricts}
-						<GeoJSON id="planning-areas" data={planningareas} promoteId="name">
-							{#if showFill}
-								<FillLayer
-									paint={{
-										'fill-color': hoverStateFilter(fillColor, colors.hoverBgColor),
-										'fill-opacity': 0.5
-									}}
-								></FillLayer>
-							{/if}
-							{#if showBorder}
-								<LineLayer
-									layout={{ 'line-cap': 'round', 'line-join': 'round' }}
-									paint={{ 'line-color': borderColor, 'line-width': 0.7 }}
-								/>
-							{/if}
-							<GeoJSON id="planning-areas-centers" data={planningAreasCenters} promoteId="district">
-								<SymbolLayer
-									paint={{
-										'text-color': '#010',
-										'text-halo-color': '#fff',
-										'text-halo-width': 1.5,
-										'text-halo-blur': 1
-									}}
-									layout={{
-										'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-										'text-allow-overlap': false,
-										'text-field': ['get', 'district'],
-										'text-size': zoomTransition(6, 10, 15, 18),
-										'text-offset': [0, 0]
-										// 'text-anchor': 'left'
-									}}
-								/>
+{:else if $postalCodesStore.data && $postalCodesStore.data.features}
+	<Scroller {threshold} bottom={0.8} bind:index={mapSectionId} bind:progress={progressValue}>
+		{#snippet backgroundElements()}
+			<div slot="background">
+				<div class="col-full height-full">
+					<MapLibre
+						bind:map
+						bind:loaded
+						style={streetsStyle}
+						standardControls={explore}
+						center={[103.8198, 1.3221]}
+						zoom={currentZoom}
+						interactive={explore}
+						antialias={true}
+						zoomOnDoubleClick={false}
+						on:zoomend={handleZoomEnd}
+						on:zoom={() => {
+							const zoomdist = map.getZoom();
+							map.setPaintProperty(
+								'building-extrusions',
+								'fill-extrusion-opacity',
+								Math.min(1, Math.max(0, (zoomdist - BUILDING_ZOOM_START) / 2))
+							); // Fade in between zoom 14-16
+						}}
+						filterLayers={(l) => {
+							// Hide the built-in 3D building layer since we're doing our own.
+							return l.id !== 'building-3d';
+						}}
+					>
+						{#if showDistricts}
+							<GeoJSON id="planning-areas" data={planningareas} promoteId="name">
+								{#if showFill}
+									<FillLayer
+										paint={{
+											'fill-color': hoverStateFilter(fillColor, colors.hoverBgColor),
+											'fill-opacity': 0.5
+										}}
+									></FillLayer>
+								{/if}
+								{#if showBorder}
+									<LineLayer
+										layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+										paint={{ 'line-color': borderColor, 'line-width': 0.7 }}
+									/>
+								{/if}
+								<GeoJSON
+									id="planning-areas-centers"
+									data={planningAreasCenters}
+									promoteId="district"
+								>
+									<SymbolLayer
+										paint={{
+											'text-color': '#010',
+											'text-halo-color': '#fff',
+											'text-halo-width': 1.5,
+											'text-halo-blur': 1
+										}}
+										layout={{
+											'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+											'text-allow-overlap': false,
+											'text-field': ['get', 'district'],
+											'text-size': zoomTransition(6, 10, 15, 18),
+											'text-offset': [0, 0]
+											// 'text-anchor': 'left'
+										}}
+									/>
+								</GeoJSON>
 							</GeoJSON>
-						</GeoJSON>
-					{/if}
-					{#if showHeatmap}
-						<GeoJSON
-							id="postal-codes"
-							data={postalcodes}
-							cluster={{
-								radius: 15,
-								maxZoom: 22
-							}}
-						>
-							<HeatmapLayer
-								filter={filterPostalCode}
-								source="postal-codes"
-								maxzoom={BUILDING_ZOOM_START}
-								paint={{
-									// Increase the heatmap weight based on frequency and property magnitude
-									'heatmap-weight': [
-										'interpolate',
-										['linear'],
-										['get', 'point_count'],
-										0,
-										0,
-										1,
-										0.5,
-										5,
-										1
-									],
-									// Increase the heatmap color weight weight by zoom level
-									// heatmap-intensity is a multiplier on top of heatmap-weight
-									'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 19, 3],
-									// Color ramp for heatmap.  Domain is 0 (low) to 1 (high).
-									// Begin color ramp at 0-stop with a 0-transparancy color
-									// to create a blur-like effect.
-									'heatmap-color': [
-										'interpolate',
-										['linear'],
-										['heatmap-density'],
-										0,
-										'rgba(33,102,172,0)',
-										0.2,
-										'rgb(103,169,207)',
-										0.4,
-										'rgb(209,229,240)',
-										0.6,
-										'rgb(253,219,199)',
-										0.8,
-										'rgb(239,138,98)',
-										1,
-										'rgb(178,24,43)'
-									],
-									// Adjust the heatmap radius by zoom level
-									'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 19, 15],
-									// Transition from heatmap to circle layer by zoom level
-									'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 10, 1, 22, 0]
+						{/if}
+						{#if showHeatmap}
+							<GeoJSON
+								id="postal-codes"
+								data={postalcodes}
+								cluster={{
+									radius: 15,
+									maxZoom: 22
 								}}
-							/>
+							>
+								<HeatmapLayer
+									filter={filterPostalCode}
+									source="postal-codes"
+									maxzoom={BUILDING_ZOOM_START}
+									paint={{
+										// Increase the heatmap weight based on frequency and property magnitude
+										'heatmap-weight': [
+											'interpolate',
+											['linear'],
+											['get', 'point_count'],
+											0,
+											0,
+											1,
+											0.5,
+											5,
+											1
+										],
+										// Increase the heatmap color weight weight by zoom level
+										// heatmap-intensity is a multiplier on top of heatmap-weight
+										'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 19, 3],
+										// Color ramp for heatmap.  Domain is 0 (low) to 1 (high).
+										// Begin color ramp at 0-stop with a 0-transparancy color
+										// to create a blur-like effect.
+										'heatmap-color': [
+											'interpolate',
+											['linear'],
+											['heatmap-density'],
+											0,
+											'rgba(33,102,172,0)',
+											0.2,
+											'rgb(103,169,207)',
+											0.4,
+											'rgb(209,229,240)',
+											0.6,
+											'rgb(253,219,199)',
+											0.8,
+											'rgb(239,138,98)',
+											1,
+											'rgb(178,24,43)'
+										],
+										// Adjust the heatmap radius by zoom level
+										'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 19, 15],
+										// Transition from heatmap to circle layer by zoom level
+										'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 10, 1, 22, 0]
+									}}
+								/>
 
-							<!-- {#if showPostalInfo}
+								<!-- {#if showPostalInfo}
 								<SymbolLayer applyToClusters={false} source="postal-codes" filter={filterPostalCode}
 								></SymbolLayer>
 							{/if} -->
-						</GeoJSON>
-					{/if}
+							</GeoJSON>
+						{/if}
 
-					<GeoJSON
-						id="postal-codes-clusters"
-						data={postalcodes}
-						cluster={{
-							radius: 500,
-							maxZoom: 10
-						}}
-					>
-						{#if showClusterCircles}
-							<CircleLayer
-								id="clusters"
-								applyToClusters={false}
-								filter={filterPostalCode}
-								manageHoverState={true}
-								source="postal-codes-clusters"
-								paint={{
-									'circle-color': '#1c9099',
-									'circle-radius': 12,
-									'circle-opacity': 0.8,
-									'circle-stroke-color': '#636363',
-									'circle-stroke-width': 3,
-									'circle-stroke-opacity': hoverStateFilter(0, 1)
-								}}
-							>
-								<!-- <Popup open={true} let:data anchor="top">
+						<GeoJSON
+							id="postal-codes-clusters"
+							data={postalcodes}
+							cluster={{
+								radius: 500,
+								maxZoom: 10
+							}}
+						>
+							{#if showClusterCircles}
+								<CircleLayer
+									id="clusters"
+									applyToClusters={false}
+									filter={filterPostalCode}
+									manageHoverState={true}
+									source="postal-codes-clusters"
+									paint={{
+										'circle-color': '#1c9099',
+										'circle-radius': 12,
+										'circle-opacity': 0.8,
+										'circle-stroke-color': '#636363',
+										'circle-stroke-width': 3,
+										'circle-stroke-opacity': hoverStateFilter(0, 1)
+									}}
+								>
+									<!-- <Popup open={true} let:data anchor="top">
 									{@const props = data?.properties}
 									{#if props}
 										<div class="popup-content">
@@ -847,184 +889,478 @@
 										</div>
 									{/if}
 								</Popup> -->
-							</CircleLayer>
+								</CircleLayer>
 
-							<SymbolLayer
-								filter={filterPostalCode}
-								source="postal-codes-clusters"
-								id="cluster_labels"
-								interactive={false}
-								applyToClusters={false}
-								layout={{
-									'text-field': ['format', 'Address: ', {}, ['get', 'ADDRESS'], {}],
-									'text-variable-anchor': ['right', 'top'],
-									'text-offset': [0.5, 0.1],
-									'text-allow-overlap': false,
-									'text-ignore-placement': false,
-									'text-justify': 'left'
-								}}
-								paint={{
-									'text-halo-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 13, 1],
-									'text-opacity': ['interpolate', ['linear'], ['zoom'], 8, 1, 13, 0.9]
-								}}
-							/>
-						{/if}
-						{#if showClusterCounts}
-							<SymbolLayer
-								filter={filterPostalCode}
-								source="postal-codes-clusters"
-								id="cluster_labels"
-								interactive={false}
-								applyToClusters
-								layout={{
-									'text-field': [
-										'format',
-										'Count: ',
-										{ 'font-scale': 0.8 },
-										['get', 'point_count_abbreviated'],
-										{ 'font-scale': 1.2 }
-									],
-									'text-size': [
-										'interpolate',
-										['linear'],
-										['zoom'],
-										8,
-										['interpolate', ['linear'], ['get', 'point_count'], 0, 14, 100, 28],
-										13,
-										['interpolate', ['linear'], ['get', 'point_count'], 0, 12, 100, 24]
-									],
-									'text-offset': [0, 0.1],
-									'text-allow-overlap': true,
-									'text-ignore-placement': false
-								}}
-								paint={{
-									'text-color': ['step', ['get', 'point_count'], '#000000', 50, '#ffffff'],
-									'text-halo-color': ['step', ['get', 'point_count'], '#ffffff', 50, '#000000'],
-									'text-halo-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 13, 1],
-									'text-opacity': ['interpolate', ['linear'], ['zoom'], 8, 1, 13, 0.9]
-								}}
-							/>
-						{/if}
-					</GeoJSON>
-				</MapLibre>
-				{#if showInputOverlay && progressValue > 0.95}
-					<div class="map-overlay top" transition:fade={{ delay: 250, duration: 300 }}>
-						<div class="map-overlay-inner">
-							<h3 class="text-big" style="margin-bottom: 15px;">Postal Code Explorer</h3>
-							<input
-								type="text"
-								placeholder="Enter a 6 digit postal code"
-								bind:value={displayedValue}
-								on:input={debouncedHandleInput}
-							/>
-
-							{#if showError}
-								<p class=" error">Please enter only digits.</p>
-							{:else if displayedValue.length > 6}
-								<p class=" error">Postal codes have only 6 digits.</p>
-							{:else if filterPostalCodeData.length === 0}
-								<p class=" error">
-									Can't find that postal code, try removing entries or try {previousWorkingPostal}
-								</p>
+								<SymbolLayer
+									filter={filterPostalCode}
+									source="postal-codes-clusters"
+									id="cluster_labels"
+									interactive={false}
+									applyToClusters={false}
+									layout={{
+										'text-field': ['format', 'Address: ', {}, ['get', 'ADDRESS'], {}],
+										'text-variable-anchor': ['right', 'top'],
+										'text-offset': [0.5, 0.1],
+										'text-allow-overlap': false,
+										'text-ignore-placement': false,
+										'text-justify': 'left'
+									}}
+									paint={{
+										'text-halo-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 13, 1],
+										'text-opacity': ['interpolate', ['linear'], ['zoom'], 8, 1, 13, 0.9]
+									}}
+								/>
 							{/if}
+							{#if showClusterCounts}
+								<SymbolLayer
+									filter={filterPostalCode}
+									source="postal-codes-clusters"
+									id="cluster_labels"
+									interactive={false}
+									applyToClusters
+									layout={{
+										'text-field': [
+											'format',
+											'Count: ',
+											{ 'font-scale': 0.8 },
+											['get', 'point_count_abbreviated'],
+											{ 'font-scale': 1.2 }
+										],
+										'text-size': [
+											'interpolate',
+											['linear'],
+											['zoom'],
+											8,
+											['interpolate', ['linear'], ['get', 'point_count'], 0, 14, 100, 28],
+											13,
+											['interpolate', ['linear'], ['get', 'point_count'], 0, 12, 100, 24]
+										],
+										'text-offset': [0, 0.1],
+										'text-allow-overlap': true,
+										'text-ignore-placement': false
+									}}
+									paint={{
+										'text-color': ['step', ['get', 'point_count'], '#000000', 50, '#ffffff'],
+										'text-halo-color': ['step', ['get', 'point_count'], '#ffffff', 50, '#000000'],
+										'text-halo-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 13, 1],
+										'text-opacity': ['interpolate', ['linear'], ['zoom'], 8, 1, 13, 0.9]
+									}}
+								/>
+							{/if}
+						</GeoJSON>
+					</MapLibre>
+					{#if showInputOverlay && progressValue > 0.95}
+						<div class="map-overlay top" transition:fade={{ delay: 250, duration: 300 }}>
+							<div class="map-overlay-inner">
+								<h3 class="text-big" style="margin-bottom: 15px;">Postal Code Explorer</h3>
+								<input
+									type="text"
+									placeholder="Enter a 6 digit postal code"
+									bind:value={displayedValue}
+									oninput={debouncedHandleInput}
+								/>
 
-							<p style="margin-top: 5px">
-								<Em color="#206095">{filterPostalCodeData.length}</Em> Postal Codes are currently shown.
-							</p>
+								{#if showError}
+									<p class=" error">Please enter only digits.</p>
+								{:else if displayedValue?.length > 6}
+									<p class=" error">Postal codes have only 6 digits.</p>
+								{:else if filterPostalCodeData?.length === 0}
+									<p class=" error">
+										Can't find that postal code, try removing entries or try {previousWorkingPostal}
+									</p>
+								{/if}
+
+								<p style="margin-top: 5px">
+									<Em color="#206095">{filterPostalCodeData?.length}</Em> Postal Codes are currently
+									shown.
+								</p>
+							</div>
 						</div>
-					</div>
-				{/if}
+					{/if}
+				</div>
 			</div>
-		</div>
-
-		<div slot="foreground">
-			<section data-id="map01"></section>
-			<section data-id="map02">
-				<div class="col-medium">
-					<p>
-						Beginning in the 1950s, Singapore was originally split into <Em color="#206095">28</Em> Postal
-						Districts.
-					</p>
-				</div>
-			</section>
-			<section data-id="map03">
-				<div class="col-medium">
-					<p>
-						Fast forward to September 1995, the postal code uses a <Em color="#206095">6</Em> digit system
-						which divides Singapore into 80 postal sectors.
-					</p>
-					<p>
-						<Em color="#206095">{$postalCodesStore.data.features.length}</Em> postal codes are displayed
-						on this map to illustrate its distribution.
-					</p>
-				</div>
-			</section>
-			<section data-id="map04">
-				<div class="col-medium">
-					<p>Singapore's 6 digit postal code system works as follows:</p>
-					<h2><Em color="#003C57">54</Em><span color="grey">2264</span></h2>
-					<p>The first two digits of each postal code denote a postal sector.</p>
-				</div>
-			</section>
-			<section data-id="map05">
-				<div class="col-medium">
-					<h2>542<Em color="#003C57">264</Em></h2>
-					<p>
-						The last 3 digits are used to indicate residential properties in an apartment block.
-					</p>
-				</div>
-			</section>
-			<section data-id="map06">
-				<div class="col-medium">
-					<h2>
-						54<Em color="#003C57">2</Em>264
-					</h2>
-					<p>
-						For residential blocks that share the same number, the 3rd digit is used to
-						differentiate between blocks.
-					</p>
-				</div>
-			</section>
-			<section data-id="map07">
-				<div class="col-medium">
-					<h2>
-						54<Em color="#003C57"><Counter></Counter></Em>264
-					</h2>
-					<p>
-						Within the same postal sector, postal codes are given out based on street names, from A
-						to Z. In each area:
-					</p>
-					<ol>
-						<li>Streets starting with 'A' get codes first</li>
-						<li>Then streets starting with 'B', and so on</li>
-						<li>The third number in the code often matches something about the street name</li>
-					</ol>
-
-					This system is used for homes, shops, and factories.
-				</div>
-			</section>
-			<section data-id="map08">
-				{#if progressValue < 0.95}
+		{/snippet}
+		{#snippet foregroundElements()}
+			<div slot="foreground">
+				<section data-id="map01"></section>
+				<section data-id="map02">
 					<div class="col-medium">
-						<h2>Try it yourself!</h2>
-						<p>Scroll below to try some postal codes!</p>
+						<p>
+							Beginning in the 1950s, Singapore was originally split into <Em color="#206095">28</Em
+							> Postal Districts.
+						</p>
 					</div>
-				{/if}
-			</section>
-		</div>
+				</section>
+				<section data-id="map03">
+					<div class="col-medium">
+						<p>
+							Fast forward to September 1995, the postal code uses a <Em color="#206095">6</Em> digit
+							system which divides Singapore into 80 postal sectors.
+						</p>
+						<p>
+							<Em color="#206095">{$postalCodesStore.data?.features?.length}</Em> postal codes are displayed
+							on this map to illustrate its distribution.
+						</p>
+					</div>
+				</section>
+				<section data-id="map04">
+					<div class="col-medium">
+						<p>Singapore's 6 digit postal code system works as follows:</p>
+						<h2><Em color="#003C57">54</Em><span color="grey">2264</span></h2>
+						<p>The first two digits of each postal code denote a postal sector.</p>
+					</div>
+				</section>
+				<section data-id="map05">
+					<div class="col-medium">
+						<h2>542<Em color="#003C57">264</Em></h2>
+						<p>
+							The last 3 digits are used to indicate residential properties in an apartment block.
+						</p>
+					</div>
+				</section>
+				<section data-id="map06">
+					<div class="col-medium">
+						<h2>
+							54<Em color="#003C57">2</Em>264
+						</h2>
+						<p>
+							For residential blocks that share the same number, the 3rd digit is used to
+							differentiate between blocks.
+						</p>
+					</div>
+				</section>
+				<section data-id="map07">
+					<div class="col-medium">
+						<h2>
+							54<Em color="#003C57"><Counter></Counter></Em>264
+						</h2>
+						<p>
+							Within the same postal sector, postal codes are given out based on street names, from
+							A to Z. In each area:
+						</p>
+						<ol>
+							<li>Streets starting with 'A' get codes first</li>
+							<li>Then streets starting with 'B', and so on</li>
+							<li>The third number in the code often matches something about the street name</li>
+						</ol>
+
+						This system is used for homes, shops, and factories.
+					</div>
+				</section>
+				<section data-id="map08">
+					{#if progressValue < 0.95}
+						<div class="col-medium">
+							<h2>Try it yourself!</h2>
+							<p>Scroll below to try some postal codes!</p>
+						</div>
+					{/if}
+				</section>
+			</div>
+		{/snippet}
 	</Scroller>
 {/if}
 
-<!-- </div> -->
-<!-- 
-<Section>
-	<h2>This is a dynamic map section</h2>
-	<p class="text-xs">
-		The map below will respond to the captions as you scroll down. The scroller is not set to
-		splitscreen, so captions are placed over the map on any screen size.
-	</p>
-</Section> -->
 <style>
+	/* GLOBALS */
+
+	/* COMPONENTS */
+
+	a {
+		color: #206095;
+	}
+
+	a:hover {
+		color: #323132;
+	}
+
+	label {
+		display: block;
+	}
+
+	input,
+	button,
+	select,
+	textarea {
+		font-family: inherit;
+		font-size: inherit;
+		-webkit-padding: 0.4em 0;
+		padding: 0.4em;
+		margin: 0 0 0.5em 0;
+		-webkit-box-sizing: border-box;
+		box-sizing: border-box;
+		border: 1px solid #ccc;
+		border-radius: 2px;
+	}
+
+	input:disabled {
+		color: #ccc;
+	}
+
+	button {
+		color: #333;
+		background-color: #f4f4f4;
+		outline: none;
+	}
+
+	button:disabled {
+		color: #999;
+	}
+
+	button:not(:disabled):active {
+		background-color: #ddd;
+	}
+
+	button:focus {
+		border-color: #666;
+	}
+
+	/* Other layout elements - positioned below header */
+	section,
+	figure,
+	caption {
+		display: -webkit-box;
+		display: -ms-flexbox;
+		display: flex;
+		-webkit-box-pack: center;
+		-ms-flex-pack: center;
+		justify-content: center;
+		background-position: center;
+		background-repeat: no-repeat;
+		background-size: cover;
+		margin: 0;
+		padding: 0;
+		position: relative;
+		z-index: 1; /* Below header but above background */
+	}
+
+	footer {
+		margin: 60px 0 0 0;
+	}
+
+	h1 {
+		font-size: 54px;
+		line-height: 1.3;
+		margin: 30px 0 0 0;
+	}
+
+	h2 {
+		font-size: 30px;
+		margin: 40px 0 -20px 0;
+	}
+
+	h3 {
+		font-size: 22px;
+		margin: 40px 0 -10px 0;
+	}
+
+	p {
+		margin: 30px 0 0 0;
+	}
+
+	img {
+		max-width: 100%;
+		height: auto;
+		vertical-align: middle;
+	}
+
+	blockquote {
+		margin: 30px 0 6px 0;
+		font-size: 30px;
+		color: #777;
+	}
+
+	small {
+		font-size: 14px;
+	}
+
+	/* CLASSES */
+
+	.col-full {
+		width: 100%;
+	}
+
+	.col-wide {
+		width: 100%;
+		max-width: 980px;
+		margin: 0 24px;
+	}
+
+	.col-medium {
+		width: 100%;
+		max-width: 680px;
+		margin: 0 24px;
+	}
+
+	.col-narrow {
+		width: 100%;
+		max-width: 540px;
+		margin: 0 24px;
+	}
+
+	.height-full {
+		min-height: 100vh;
+	}
+
+	.center {
+		text-align: center;
+	}
+
+	.middle {
+		height: 100%;
+		display: -webkit-box;
+		display: -ms-flexbox;
+		display: flex;
+		-webkit-box-orient: vertical;
+		-webkit-box-direction: normal;
+		-ms-flex-direction: column;
+		flex-direction: column;
+		-webkit-box-pack: center;
+		-ms-flex-pack: center;
+		justify-content: center;
+	}
+
+	.caption {
+		margin-top: 8px;
+		text-align: left;
+		font-size: 14px;
+		color: #777;
+	}
+
+	.inset-medium {
+		max-width: 680px;
+		margin-left: auto !important;
+		margin-right: auto !important;
+	}
+
+	.inset-narrow {
+		max-width: 480px;
+		margin-left: auto !important;
+		margin-right: auto !important;
+	}
+
+	.text-big {
+		font-size: 30px;
+		margin: 20px 0;
+	}
+
+	.text-small {
+		font-size: 14px;
+	}
+
+	.text-indent {
+		margin-left: 30px;
+	}
+
+	.text-shadow {
+		text-shadow: 0 0 8px #000;
+	}
+
+	.text-bold {
+		font-weight: bold;
+	}
+
+	.text-muted {
+		color: #777;
+	}
+
+	.mt {
+		margin-top: 72px;
+	}
+
+	.mb {
+		margin-bottom: 40px;
+	}
+
+	.em {
+		padding: 1px 4px 1px 4px;
+		/*	border-radius: 5px; */
+		font-weight: bold;
+		white-space: nowrap;
+	}
+
+	.em-muted {
+		background-color: #777;
+		color: #fff;
+	}
+
+	/* SCROLL-SPECIFIC ELEMENTS */
+
+	svelte-scroller-background-container {
+		pointer-events: all !important;
+		position: relative;
+		z-index: 2; /* Above regular content but below header */
+	}
+
+	[slot='foreground'] {
+		position: relative;
+		z-index: 10; /* Above background but below header */
+	}
+
+	[slot='foreground'] section {
+		padding: 100vh 0 100vh 0;
+		position: relative;
+		z-index: 10;
+	}
+
+	[slot='foreground'] section + section {
+		padding: 0 0 100vh 0;
+	}
+
+	[slot='foreground'] section div {
+		padding: 12px;
+		position: relative;
+		z-index: 11;
+	}
+
+	[slot='foreground'] section div::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 100%;
+		height: 100%;
+		background-color: #fff;
+		opacity: 0.8;
+		z-index: -1;
+	}
+
+	[slot='foreground'] section div p {
+		margin: 0;
+	}
+
+	[slot='foreground'] section div p + p {
+		margin-top: 30px;
+	}
+
+	[slot='foreground'] section div h2,
+	[slot='foreground'] section div h3 {
+		margin: 10px 0 20px 0;
+	}
+
+	@media (min-width: 992px) {
+		.splitscreen svelte-scroller-background {
+			width: calc(100% - 480px) !important;
+			min-width: 65%;
+			margin: 0 0 0 auto;
+		}
+
+		.splitscreen [slot='foreground'] section div::before {
+			opacity: 0;
+		}
+
+		.splitscreen [slot='foreground'] section {
+			width: 480px;
+			max-width: 35%;
+			margin: 0 auto 0 0;
+			background-color: #fff;
+		}
+
+		.splitscreen [slot='foreground'] .col-medium {
+			width: 100%;
+			margin: 0;
+			padding: 0 30px;
+		}
+	}
 	/* Styles specific to elements within the demo */
 	:global(svelte-scroller-foreground) {
 		pointer-events: none !important;
@@ -1071,28 +1407,6 @@
 		font-size: 18px;
 		margin-top: 10px;
 		color: #333;
-	}
-
-	.popup-content {
-		max-width: 200px; /* Adjust this value as needed */
-		word-wrap: break-word;
-		white-space: normal;
-		font-family: 'Open Sans', 'Helvetica Neue', 'Arial', sans-serif;
-		font-size: 12px;
-	}
-
-	.address-text {
-		font-weight: 500;
-		color: #1f2937; /* This is equivalent to Tailwind's text-gray-800 */
-	}
-
-	.property-value {
-		display: inline-block;
-		max-width: 200px;
-		word-wrap: break-word;
-		overflow-wrap: break-word;
-		hyphens: auto;
-		vertical-align: top;
 	}
 
 	.map-overlay {

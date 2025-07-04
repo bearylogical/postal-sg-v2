@@ -1,6 +1,6 @@
 <script>
 	import { setContext } from 'svelte';
-	import '../app.css';
+
 	import { themes } from '$lib/config';
 
 	// STYLE CONFIG

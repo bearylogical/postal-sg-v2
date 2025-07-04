@@ -1,9 +1,4 @@
-<!-- @migration-task Error while migrating Svelte code: This migration would change the name of a slot (background to background_1) making the component unusable -->
 <script module>
-	// Based on svelte-scroller by Rich Harris
-	// https://github.com/sveltejs/svelte-scroller
-	// Patched to transpile to IE 11 and allow for split-screen view option
-
 	const handlers = [];
 	let manager;
 
@@ -71,40 +66,50 @@
 <script>
 	import { onMount } from 'svelte';
 
-	// config
-	export let top = 0;
-	export let bottom = 1;
-	export let threshold = 0.5;
-	export let query = 'section';
-	export let parallax = false;
-
-	// bindings
-	export let index = 0;
-	export let count = 0;
-	export let offset = 0;
-	export let progress = 0;
-	export let visible = false;
-	export let splitscreen = false; // Add class to allow for split screen option
-	export let id = null;
+	let {
+		top = 0,
+		bottom = 1,
+		threshold = 0.5,
+		query = 'section',
+		parallax = false,
+		index = $bindable(0),
+		count = $bindable(0),
+		offset = $bindable(0),
+		progress = $bindable(0),
+		visible = $bindable(false),
+		foregroundElements,
+		backgroundElements
+	} = $props();
 
 	let outer;
-	let bgContainer; // IE patch. Container binding to update inline style
 	let foreground;
 	let background;
 	let left;
 	let sections;
-	let wh = 0;
-	let fixed;
-	let offset_top;
-	let width = 1;
-	let height;
-	let inverted;
 
-	$: top_px = Math.round(top * wh);
-	$: bottom_px = Math.round(bottom * wh);
-	$: threshold_px = Math.round(threshold * wh);
+	let wh = $state(0);
+	let fixed = $state();
+	let offset_top = $state(0);
+	let width = $state(1);
+	let height = $state();
 
-	$: top, bottom, threshold, parallax, update();
+	const top_px = $derived(Math.round(top * wh));
+	const bottom_px = $derived(Math.round(bottom * wh));
+	const threshold_px = $derived(Math.round(threshold * wh));
+
+	$effect(() => {
+		top, bottom, threshold, parallax;
+		update();
+	});
+
+	const style = $derived(`
+		position: ${fixed ? 'fixed' : 'absolute'};
+		top: 0;
+		transform: translate(0, ${offset_top}px);
+		z-index: 1;
+	`);
+
+	const widthStyle = $derived(fixed ? `width:${width}px;` : '');
 
 	onMount(() => {
 		sections = foreground.querySelectorAll(query);
@@ -117,8 +122,6 @@
 		manager.add(scroller);
 		return () => manager.remove(scroller);
 	});
-
-	// IE patch. BG container style (fixed/unfixed) set via function
 	function setFixed() {
 		if (bgContainer) {
 			let style = `position: ${fixed ? 'fixed' : 'absolute'}; top: 0; transform: translate(0, ${offset_top}px); width: ${width}px; z-index: ${inverted ? 3 : 1};`;
@@ -132,7 +135,7 @@
 		// re-measure outer container
 		const bcr = outer.getBoundingClientRect();
 		left = bcr.left;
-		width = bcr.right - bcr.left;
+		width = bcr.right - left;
 
 		// determine fix state
 		const fg = foreground.getBoundingClientRect();
@@ -148,27 +151,20 @@
 
 		if (progress <= 0) {
 			offset_top = 0;
-			if (fixed) {
-				fixed = false;
-				setFixed();
-			} // Non-IE specific patch to avoid setting style repeatedly
+			fixed = false;
 		} else if (progress >= 1) {
 			offset_top = parallax
 				? foreground_height - background_height
 				: foreground_height - available_space;
-			if (fixed) {
-				fixed = false;
-				setFixed();
-			}
+			fixed = false;
 		} else {
 			offset_top = parallax
 				? Math.round(top_px - progress * (background_height - available_space))
 				: top_px;
-			if (!fixed) {
-				fixed = true;
-				setFixed();
-			}
+			fixed = true;
 		}
+
+		if (!sections || !sections.length) return;
 
 		for (let i = 0; i < sections.length; i++) {
 			const section = sections[i];
@@ -178,7 +174,7 @@
 			const bottom = next ? next.getBoundingClientRect().top : fg.bottom;
 
 			offset = (threshold_px - top) / (bottom - top);
-			id = section.dataset.id ? section.dataset.id : null;
+
 			if (bottom >= threshold_px) {
 				index = i;
 				break;
@@ -189,15 +185,15 @@
 
 <svelte:window bind:innerHeight={wh} />
 
-<svelte-scroller-outer bind:this={outer} class:splitscreen>
-	<svelte-scroller-background-container class="background-container" bind:this={bgContainer}>
+<svelte-scroller-outer bind:this={outer}>
+	<svelte-scroller-background-container class="background-container" style="{style}{widthStyle}">
 		<svelte-scroller-background bind:this={background}>
-			<slot name="background"></slot>
+			{@render backgroundElements()}
 		</svelte-scroller-background>
 	</svelte-scroller-background-container>
 
 	<svelte-scroller-foreground bind:this={foreground}>
-		<slot name="foreground"></slot>
+		{@render foregroundElements()}
 	</svelte-scroller-foreground>
 </svelte-scroller-outer>
 
@@ -205,7 +201,6 @@
 	svelte-scroller-outer {
 		display: block;
 		position: relative;
-		max-width: 100%;
 	}
 
 	svelte-scroller-background {
@@ -229,9 +224,8 @@
 	svelte-scroller-background-container {
 		display: block;
 		position: absolute;
-		/* width: 100%; */
-		/* max-width: 100%; */
-		pointer-events: none;
+
+		/* pointer-events: none; */
 		/* height: 100%; */
 
 		/* in theory this helps prevent jumping */
