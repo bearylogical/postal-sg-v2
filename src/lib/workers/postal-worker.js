@@ -181,7 +181,10 @@ self.onmessage = async function (e) {
 			const { pattern, maxResults } = data;
 			// console.log(`Filtering postal codes with pattern: ${pattern}, maxResults: ${maxResults}`);
 			const filtered = filterPostalCodes(pattern, maxResults, precision);
-			const simplified = aggregateByCoordinate(filtered.features, simplifiedPrecision);
+			const simplified = aggregateByCoordinate(
+				filtered.features,
+				filtered.features?.length > 1000 ? simplifiedPrecision : precision
+			);
 
 			const bounds = calculateBounds(filtered.features);
 
