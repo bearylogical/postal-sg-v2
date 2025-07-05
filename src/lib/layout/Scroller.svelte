@@ -148,7 +148,6 @@
 
 		const available_space = bottom_px - top_px;
 		progress = (top_px - fg.top) / (foreground_height - available_space);
-
 		if (progress <= 0) {
 			offset_top = 0;
 			fixed = false;
@@ -224,9 +223,10 @@
 	svelte-scroller-background-container {
 		display: block;
 		position: absolute;
-
+		width: 100%;
+		/* max-width: 100%; */
 		/* pointer-events: none; */
-		/* height: 100%; */
+		height: 100%;
 
 		/* in theory this helps prevent jumping */
 		will-change: transform;
