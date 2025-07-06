@@ -16,11 +16,13 @@ async function loadPostalCodes(url) {
 		const data = await response.json();
 		postalCodesData = data;
 		const simplified = aggregateByCoordinate(data.features, simplifiedPrecision);
+		const bounds = calculateBounds(data.features);
 		return {
 			success: true,
 			count: data.features?.length || 0,
 			features: data,
-			simplified: simplified
+			simplified: simplified,
+			bounds: bounds
 		};
 	} catch (error) {
 		return { success: false, error: error.message };

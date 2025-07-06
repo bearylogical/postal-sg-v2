@@ -72,7 +72,7 @@
 		threshold = 0.5,
 		query = 'section',
 		parallax = false,
-		index = $bindable(0),
+		index = $bindable(1),
 		count = $bindable(0),
 		offset = $bindable(0),
 		progress = $bindable(0),

@@ -168,7 +168,7 @@
 
 	// START EXTRACT
 	let map = $state<maplibregl.Map | undefined>();
-	let loaded = $state<boolean>();
+	let loaded = $state(false);
 	let touched = $state(false);
 	let showInputOverlay = $state(false);
 	let progressValue = $state<number>(0);
@@ -176,7 +176,7 @@
 	let textLayers = $state<maplibregl.LayerSpecification[]>([]);
 	let hoverArea = $state<Record<string, any> | null>(null);
 
-	$effect(() => {
+	$effect.pre(() => {
 		if (map && loaded) {
 			textLayers = map.getStyle().layers.filter((layer) => layer['source-layer'] === 'place');
 		}
@@ -199,9 +199,6 @@
 	// Update data from stores
 	$effect(() => {
 		planningAreasData = $planningAreasStore.data;
-	});
-
-	$effect(() => {
 		postalCodesData = $postalCodesStore.data;
 	});
 
@@ -339,14 +336,14 @@
 
 	let colors = $derived(contrastingColor(fillColor));
 
-	$effect(() => {
-		if (map && loaded) {
-			for (let layer of textLayers) {
-				map.setPaintProperty(layer.id, 'text-color', colors.textColor);
-				map.setPaintProperty(layer.id, 'text-halo-color', colors.textOutlineColor);
-			}
-		}
-	});
+	// $effect.pre(() => {
+	// 	if (map && loaded) {
+	// 		for (let layer of textLayers) {
+	// 			map.setPaintProperty(layer.id, 'text-color', colors.textColor);
+	// 			map.setPaintProperty(layer.id, 'text-halo-color', colors.textOutlineColor);
+	// 		}
+	// 	}
+	// });
 
 	let filterPlanningAreas = $state(false);
 	// $: filter = filterPlanningAreas ? ['==', 'T', ['slice', ['get', 'Attributes'], 0, 1]] : undefined;
@@ -437,7 +434,7 @@
 		const {
 			detail: { map }
 		} = event;
-		console.log('Zoom level changed:', map.getZoom());
+		// console.log('Zoom level changed:', map.getZoom());
 		currentZoom = map.getZoom();
 
 		checkZoomAndUpdate();
@@ -521,7 +518,8 @@
 
 	function checkZoomAndUpdate() {
 		if (map.getZoom() >= BUILDING_ZOOM_START && inputValue && filterPostalCodeData.length < 12) {
-			updateBuildingColors(filterPostalCodeData);
+			console.log('Zoom level is high enough, updating building colors');
+			// updateBuildingColors(filterPostalCodeData);
 		}
 	}
 
@@ -532,11 +530,13 @@
 		const features = map.querySourceFeatures('maptiler_planet', {
 			sourceLayer: 'building'
 		});
-		// console.log('Number of buildings to process:', features.length);
+		console.log('Number of building features:', features.length);
+		// filter out buildings that are not MultiPolygon
+		const filteredFeatures = features.filter((feature) => feature.geometry.type === 'MultiPolygon');
 
 		const containingPolygons = [];
 
-		features.forEach((building) => {
+		filteredFeatures.forEach((building) => {
 			try {
 				if (building.geometry.type !== 'MultiPolygon') {
 					console.warn('Unexpected geometry type:', building.geometry.type);
@@ -582,7 +582,6 @@
 			type: 'FeatureCollection',
 			features: containingPolygons
 		};
-
 		if (map.getSource('containing-polygons')) {
 			// If it exists, update the data
 			map.getSource('containing-polygons').setData(filteredPolygons);
@@ -604,6 +603,8 @@
 					'fill-extrusion-opacity': 0
 				}
 			});
+			console.log('Adding new source and layers for containing polygons');
+			console.log('Filtered polygons:', filteredPolygons);
 			// Add the extrusion layer
 			map.addLayer({
 				id: 'building-extrusions',
@@ -736,15 +737,16 @@
 						zoom={currentZoom}
 						interactive={explore}
 						antialias={true}
+						class="relative aspect-[9/16] max-h-[100vh] w-full sm:aspect-video sm:max-h-fullo"
 						zoomOnDoubleClick={false}
 						on:zoomend={handleZoomEnd}
-						on:zoom={() => {
+						onzoom={() => {
 							const zoomdist = map.getZoom();
-							map.setPaintProperty(
-								'building-extrusions',
-								'fill-extrusion-opacity',
-								Math.min(1, Math.max(0, (zoomdist - BUILDING_ZOOM_START) / 2))
-							); // Fade in between zoom 14-16
+							// map.setPaintProperty(
+							// 	'building-extrusions',
+							// 	'fill-extrusion-opacity',
+							// 	Math.min(1, Math.max(0, (zoomdist - BUILDING_ZOOM_START) / 2))
+							// ); // Fade in between zoom 14-16
 						}}
 						filterLayers={(l) => {
 							// Hide the built-in 3D building layer since we're doing our own.
@@ -1337,30 +1339,6 @@
 		margin: 10px 0 20px 0;
 	}
 
-	@media (min-width: 992px) {
-		.splitscreen svelte-scroller-background {
-			width: calc(100% - 480px) !important;
-			min-width: 65%;
-			margin: 0 0 0 auto;
-		}
-
-		.splitscreen [slot='foreground'] section div::before {
-			opacity: 0;
-		}
-
-		.splitscreen [slot='foreground'] section {
-			width: 480px;
-			max-width: 35%;
-			margin: 0 auto 0 0;
-			background-color: #fff;
-		}
-
-		.splitscreen [slot='foreground'] .col-medium {
-			width: 100%;
-			margin: 0;
-			padding: 0 30px;
-		}
-	}
 	/* Styles specific to elements within the demo */
 	:global(svelte-scroller-foreground) {
 		pointer-events: none !important;
