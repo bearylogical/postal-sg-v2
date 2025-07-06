@@ -1,32 +1,39 @@
 <script lang="ts">
 	import {
 		MapLibre,
-		GeoJSON,
+		GeoJSONSource,
 		FillLayer,
 		LineLayer,
-		hoverStateFilter,
 		CircleLayer,
-		SymbolLayer,
-		zoomTransition,
-		HeatmapLayer
-	} from 'svelte-maplibre';
+		FillExtrusionLayer,
+		NavigationControl,
+		QuerySourceFeatures,
+		SymbolLayer
+		// HeatmapLayer
+	} from 'svelte-maplibre-gl';
 	import type { FeatureCollection, Feature, Point } from 'geojson';
 	import * as turf from '@turf/turf';
 	import Section from '$lib/layout/Section.svelte';
 	import Scroller from '$lib/layout/Scroller.svelte';
 	import { contrastingColor } from '$lib/colors.js';
 	import { onMount } from 'svelte';
-	import { planningAreasStore, postalCodesStore } from '$lib/stores';
+	import { planningAreasStore } from '$lib/stores';
 	import { streetsStyle } from '$lib/styles';
 	import Em from '$lib/ui/Em.svelte';
 	import { fade } from 'svelte/transition';
-	import Counter from '$lib/ui/Counter.svelte';
-	// import '.css';
+	import maplibregl from 'maplibre-gl';
+	import PostalWorker from '$lib/workers/postal-worker.js?worker';
+	import BuildingColorWorker from '$lib/workers/building-color-worker.ts?worker';
 
-	let planningAreasData = $state([]);
-	let postalCodesData = $state([]);
-	let planningAreasError = $state();
-	let postalCodesError = $state();
+	import { DeckGLOverlay } from '@svelte-maplibre-gl/deckgl';
+	import { HeatmapLayer } from '@deck.gl/aggregation-layers';
+
+	import Counter from '$lib/ui/Counter.svelte';
+	import type { LayerSpecification } from 'maplibre-gl';
+	let hoveredFeature: maplibregl.MapGeoJSONFeature | undefined = $state.raw();
+	let lnglat = $state.raw(new maplibregl.LngLat(0, 0));
+	let controlPosition: maplibregl.ControlPosition | undefined = $state('bottom-right');
+	// import '.css';
 
 	const planningareas = 'https://data.bearylogical.net/singapore_districts.geojson';
 	const postalcodes = 'https://data.bearylogical.net/singpostcode.geojson';
@@ -40,17 +47,45 @@
 	let fillColor = $state('#006000');
 	let borderColor = $state('#003300');
 	let debugMode = $state<boolean>();
-	let explore = $state(false); // map interactivity on/off
+	let explore = $state(true); // map interactivity on/off
 	let showHeatmap = $state(false);
+	let renderHeatmap = $state(true);
 	let showDistricts = $state(false);
+	let showBuildingExtrusions = $state(false);
+	let autoZoom = $state(false);
+	let previousMapSectionId = $state(null);
+	let overrideBounds = $state(false);
+
+	// Data states
+	let dataLoading = $state(true);
+	let dataError = $state(null);
+
+	// Data variables
+	let totalPostalCodes = $state(null);
+	let currentBounds = $state<maplibregl.LngLatBounds | null>(null);
+	let filterPostalCodeDataSimplified = $state<Array | null>([]);
+	let renderedFeatures = $state<Array | null>([]);
 
 	let displayedValue = $state('');
 	// Variables to hold visible section IDs of Scroller components
-	let mapSectionId = $state<string | null>(1);
+	let mapSectionId = $state<string | number | null>(1);
+
+	let postalWorker: Worker;
+	let workerReady = $state(false);
+	let pendingFlyToOptions = $state<{
+		zoom: number;
+		pitch?: number;
+		bearing?: number;
+		center?: boolean;
+		duration?: number;
+	} | null>(null);
+
+	let buildingColorWorker: Worker;
+	let filteredPolygons = $state();
 
 	// CONFIG FOR SCROLLER COMPONENTS
 	// Config
-	const threshold = 0.8;
+	const threshold = 0.85;
 
 	// Actions for Scroller components
 	const actions = {
@@ -64,9 +99,12 @@
 				showDistricts = true;
 				showPostalInfo = false;
 				showClusterCircles = false;
+				displayedValue = '';
 				resetView();
 				showInputOverlay = false;
 				setPanRotate(false);
+				autoZoom = false;
+				overrideBounds = false;
 			},
 			map02: () => {
 				explore = false;
@@ -76,68 +114,87 @@
 				showPostalInfo = false;
 				showClusterCircles = false;
 				showInputOverlay = false;
+				autoZoom = false;
 				setPanRotate(false);
+				overrideBounds = false;
 			},
 			map03: () => {
 				explore = false;
 				showHeatmap = true;
 				showDistricts = false;
-				inputValue = '';
-				flyToFilteredPoints({ zoom: 11, center: false });
+				inputValue = '*';
+				autoZoom = true;
 				showPostalInfo = false;
 				setPanRotate(false);
 				showInputOverlay = false;
+				overrideBounds = false;
 			},
 			map04: () => {
 				explore = false;
 				showHeatmap = true;
 				inputValue = '54*';
-				flyToFilteredPoints({ zoom: 14 });
+				autoZoom = true;
+				pendingFlyToOptions = { zoom: 11, duration: 3000 };
 				showPostalInfo = false;
 				showClusterCircles = false;
+				showBuildingExtrusions = false;
 				showInputOverlay = false;
 				setPanRotate(false);
+				overrideBounds = false;
 			},
 			map05: () => {
 				explore = false;
-				showHeatmap = true;
-				inputValue = '54[1-4]264';
-				flyToFilteredPoints({ zoom: 18, pitch: 30, bearing: 60 });
-				showPostalInfo = true;
+				showHeatmap = false;
+				inputValue = '54[2-4]264';
+				displayedValue = '';
+				autoZoom = true;
+				pendingFlyToOptions = { zoom: 18, pitch: 60, bearing: 35 };
+				showPostalInfo = false;
 				showClusterCircles = false;
+				showBuildingExtrusions = true;
 				showInputOverlay = false;
 				setPanRotate(false);
+				overrideBounds = true;
 			},
 			map06: () => {
 				explore = false;
-				showHeatmap = true;
+				showHeatmap = false;
 				inputValue = '542264';
-				flyToFilteredPoints({ zoom: 18, pitch: 45, bearing: 35 });
-				showPostalInfo = true;
+				displayedValue = '';
+				autoZoom = true;
+				pendingFlyToOptions = { zoom: 18, pitch: 45, bearing: 35 };
+				showPostalInfo = false;
+				showBuildingExtrusions = true;
 				showClusterCircles = false;
 				showInputOverlay = false;
 				setPanRotate(false);
+				overrideBounds = false;
 			},
 			map07: () => {
 				explore = false;
-				showHeatmap = false;
+				showHeatmap = true;
 				inputValue = '54*264';
-				flyToFilteredPoints({ zoom: 14, pitch: 0, bearing: 0 });
-				showPostalInfo = false;
+				autoZoom = true;
+				pendingFlyToOptions = { zoom: 14, pitch: 0, bearing: 0 };
+				showPostalInfo = true;
+				showBuildingExtrusions = false;
 				showClusterCircles = true;
 				showInputOverlay = false;
 				setPanRotate(false);
+				overrideBounds = false;
 			},
 			map08: () => {
 				explore = false;
 				showHeatmap = true;
 				inputValue = '*';
 				displayedValue = '';
+				autoZoom = false;
 				resetView();
 				showPostalInfo = false;
 				showClusterCircles = false;
 				showInputOverlay = true;
 				setPanRotate(false);
+				overrideBounds = false;
 			}
 		}
 	};
@@ -153,14 +210,23 @@
 	}
 
 	// Code to run Scroller actions when new caption IDs come into view
+	let currentActionId = $state(null);
+
+	let shouldRunAction = $derived.by(() => {
+		if (mapSectionId && mapSectionId !== currentActionId) {
+			return mapSectionId;
+		}
+		return null;
+	});
+
 	$effect(() => {
-		if (mapSectionId) {
-			runActions(mapSectionId, actions.map);
+		if (shouldRunAction) {
+			runActions(shouldRunAction, actions.map);
+			currentActionId = shouldRunAction;
 		}
 	});
 	function runActions(sectionId: string, actions: Map<string, () => void>) {
-		const _mapSectionId: string = 'map0' + (parseInt(sectionId, 10) + 1);
-		// console.log('Running action for section:', _mapSectionId);
+		const _mapSectionId: string = 'map' + (parseInt(sectionId, 10) + 1).toString().padStart(2, '0');
 		if (actions[_mapSectionId]) {
 			actions[_mapSectionId]();
 		}
@@ -173,129 +239,167 @@
 	let showInputOverlay = $state(false);
 	let progressValue = $state<number>(0);
 
-	let textLayers = $state<maplibregl.LayerSpecification[]>([]);
-	let hoverArea = $state<Record<string, any> | null>(null);
-
-	$effect.pre(() => {
-		if (map && loaded) {
-			textLayers = map.getStyle().layers.filter((layer) => layer['source-layer'] === 'place');
-		}
-	});
-
 	let planningAreasCenters = $state(null);
 	let error = $state(null);
 	let currentZoom = $state(10);
 	let inputValue = $state<string | null>(null);
-	let filterPostalCodeData = $state<Array | null>(null);
+	let filterPostalCodeData = $state<Array | null>([]);
 	let previousWorkingPostal = $state<string>(null);
 
-	const BUILDING_ZOOM_START = 15;
+	let modifiedStreetsStyle: maplibregl.StyleSpecification | null = $state(null);
 
+	const BUILDING_ZOOM_START = 17;
+	const NUM_BUILDINGS_TO_RENDER = 50; // Number of buildings to render at high zoom levels
+
+	const planningAreasCentersUrl = '/src/assets/singapore_districts_centers.geojson';
+	let layers: LayerSpecification[] = $state.raw([]);
+	$effect(() => {});
 	onMount(() => {
+		// Extract the layers spec from the OSM style
+
+		fetch(streetsStyle)
+			.then((response) => response.json())
+			.then((data) => {
+				layers = data['layers'].filter((layer: LayerSpecification) => layer.id !== 'Building 3D');
+				modifiedStreetsStyle = {
+					...data,
+					layers
+				};
+			});
+
 		planningAreasStore.load(planningareas);
-		postalCodesStore.load(postalcodes);
-	});
+		fetch(planningAreasCentersUrl)
+			.then((res) => res.json())
+			.then((data) => (planningAreasCenters = data))
+			.catch((err) => (error = err));
+		// workers
+		postalWorker = new PostalWorker();
+		buildingColorWorker = new BuildingColorWorker();
 
-	// Update data from stores
-	$effect(() => {
-		planningAreasData = $planningAreasStore.data;
-		postalCodesData = $postalCodesStore.data;
-	});
+		postalWorker.onmessage = (e) => {
+			const { type, data, pattern } = e.data;
 
-	function calculateCenters(g: FeatureCollection): FeatureCollection {
-		const groupedFeatures: { [key: string]: Feature[] } = {};
+			switch (type) {
+				case 'LOAD_COMPLETE':
+					if (data.success) {
+						workerReady = true;
+						totalPostalCodes = data.count;
+						filterPostalCodeData = data.features;
+						filterPostalCodeDataSimplified = data.simplified;
 
-		g.features.forEach((feature) => {
-			const district = feature.properties?.districtNumber;
-			if (district) {
-				if (!groupedFeatures[district]) {
-					groupedFeatures[district] = [];
-				}
-				groupedFeatures[district].push(feature);
+						dataLoading = false;
+					} else {
+						dataError = data.error;
+						console.error('Failed to load postal codes:', data.error);
+					}
+					break;
+
+				case 'FILTER_COMPLETE':
+					if (data.pattern === inputValue) {
+						filterPostalCodeData = data.features;
+						filterPostalCodeDataSimplified = data.simplified;
+
+						totalPostalCodes = data.count;
+						currentBounds = new maplibregl.LngLatBounds(data.bounds);
+
+						if (autoZoom && pendingFlyToOptions) {
+							flyToFilteredPoints(pendingFlyToOptions);
+							pendingFlyToOptions = null;
+						} else if ((totalPostalCodes ? totalPostalCodes > 0 : false) && !autoZoom) {
+							fitBounds(currentBounds, getZoomLevel(Number(displayedValue)));
+							// console.log(filterPostalCodeData);
+							previousWorkingPostal = filterPostalCodeData.features[0].properties.POSTAL;
+
+							if ((totalPostalCodes ? totalPostalCodes < 6 : false) && displayedValue.length > 4) {
+								showBuildingExtrusions = true;
+
+								flyToFilteredPoints({ zoom: 18, pitch: 25, bearing: 35, center: true });
+								showHeatmap = false;
+							} else {
+								showBuildingExtrusions = true;
+								showHeatmap = true;
+
+								setTimeout(() => {
+									flyToFilteredPoints({
+										zoom: getZoomLevel(Number(displayedValue)),
+										center: false
+									});
+								}, 200);
+							}
+						}
+						e;
+					}
+					break;
+
+				case 'ERROR':
+					dataError = data.message;
+					console.error('Worker error:', data.message);
+					break;
 			}
+		};
+
+		buildingColorWorker.onmessage = (e) => {
+			const { type, data } = e.data;
+			if (type === 'BUILDING_COLORS_UPDATED') {
+				filteredPolygons = data;
+			}
+		};
+
+		// Load data into worker
+		postalWorker.postMessage({
+			type: 'LOAD_DATA',
+			data: { url: postalcodes }
 		});
 
-		// Calculate centroid for each district and merge properties
-		const centroids: Feature<Point>[] = Object.entries(groupedFeatures).map(
-			([district, features]) => {
-				const combined = turf.combine(turf.featureCollection(features));
-				const centroid = turf.centroid(combined);
-
-				// Merge properties from all features in the district
-				const mergedProperties = features.reduce(
-					(acc, feature) => {
-						Object.entries(feature.properties || {}).forEach(([key, value]) => {
-							// Only update if the current value is null/undefined or if it's not set yet
-							if (value != null && (acc[key] == null || acc[key] === '')) {
-								acc[key] = value;
-							}
-						});
-						return acc;
-					},
-					{} as { [key: string]: any }
-				);
-
-				// Ensure the district property is set
-				mergedProperties.district = district;
-
-				// Create a new Feature with Point geometry and merged properties
-				return {
-					type: 'Feature',
-					properties: mergedProperties,
-					geometry: centroid.geometry
-				};
-			}
-		);
-
-		// Return a FeatureCollection
-		return {
-			type: 'FeatureCollection',
-			features: centroids
+		// Cleanup
+		return () => {
+			postalWorker?.terminate();
+			buildingColorWorker?.terminate();
 		};
-	}
+	});
 
 	// Functions for map component
-	function fitBounds(bounds, maxZoom = 18, pitch = 0, bearing = 0) {
+	function fitBounds(
+		bounds: maplibregl.LngLatBound,
+		zoom = 18,
+		pitch = 0,
+		bearing = 0,
+		duration = 5000
+	) {
 		if (map) {
 			map.fitBounds(bounds, {
-				padding: 50,
-				maxZoom: maxZoom,
-				duration: 5000,
+				zoom: zoom,
 				pitch: pitch,
+				duration: duration,
 				bearing: bearing
 			});
 		}
 	}
-
-	function calculateBounds(features) {
-		if (!features || features.length === 0) return null;
-
-		const bounds = features.reduce(
-			(bounds, feature) => {
-				const [lng, lat] = feature.geometry.coordinates;
-				return {
-					minLng: Math.min(bounds.minLng, lng),
-					minLat: Math.min(bounds.minLat, lat),
-					maxLng: Math.max(bounds.maxLng, lng),
-					maxLat: Math.max(bounds.maxLat, lat)
-				};
-			},
-			{
-				minLng: Infinity,
-				minLat: Infinity,
-				maxLng: -Infinity,
-				maxLat: -Infinity
-			}
-		);
-
-		return [
-			[bounds.minLng, bounds.minLat],
-			[bounds.maxLng, bounds.maxLat]
-		];
-	}
-	// $effect(() => console.log('progressValue', filterPostalCodeData));
+	// Simplify your existing filter effect
 	$effect(() => {
-		filterPostalCodeData = inputValue ? postalCodeDataFilter(inputValue) : [];
+		if (!workerReady || !postalWorker) return;
+
+		// Clear polygons before filtering
+		filteredPolygons = null;
+
+		if (inputValue) {
+			postalWorker.postMessage({
+				type: 'FILTER',
+				data: {
+					pattern: inputValue,
+					maxResults: -1
+				}
+			});
+		} else {
+			// Clear the filter if inputValue is empty
+			filterPostalCodeData = [];
+		}
+	});
+
+	$effect(() => {
+		if (!showBuildingExtrusions) {
+			filteredPolygons = null;
+		}
 	});
 
 	function calculateCentroid(input: FeatureCollection | Feature[]): Feature<Point> {
@@ -311,8 +415,6 @@
 				features: input
 			};
 		}
-		// Use turf.center to calculate the center of the bounding box of all features
-		// const center = turf.center(featureCollection);
 
 		// If we want a more precise centroid, we can use turf.centroid
 		const centroid = turf.centroid(featureCollection);
@@ -321,126 +423,36 @@
 		return centroid;
 	}
 
-	function flyToFilteredPoints({ zoom = 18, pitch = 0, bearing = 0, center = false }) {
-		if (filterPostalCodeData.length > 0) {
-			const bounds = calculateBounds(filterPostalCodeData);
-			if (bounds) {
-				fitBounds(bounds, zoom, pitch, bearing);
-			}
-			if (center) {
-				const centers = calculateCentroid(filterPostalCodeData);
-				map?.flyTo({ center: centers.geometry.coordinates, zoom, pitch, bearing, speed: 1 });
-			}
+	function flyToFilteredPoints({
+		zoom = 18,
+		pitch = 0,
+		bearing = 0,
+		center = false,
+		duration = 5000
+	}) {
+		// Early return if no data or bounds
+		// console.log('Current bounds:', currentBounds);
+		if (!filterPostalCodeData?.features?.length || !currentBounds) {
+			return;
+		}
+
+		if (center) {
+			// Calculate centroid from the filtered features (this is fast)
+			const centroid = calculateCentroid(filterPostalCodeData);
+			map?.flyTo({
+				center: centroid.geometry.coordinates,
+				zoom,
+				pitch,
+				bearing,
+				speed: 1,
+				duration: duration
+			});
+		} else {
+			// Use pre-calculated bounds
+
+			fitBounds(currentBounds, zoom, pitch, bearing, duration);
 		}
 	}
-
-	let colors = $derived(contrastingColor(fillColor));
-
-	// $effect.pre(() => {
-	// 	if (map && loaded) {
-	// 		for (let layer of textLayers) {
-	// 			map.setPaintProperty(layer.id, 'text-color', colors.textColor);
-	// 			map.setPaintProperty(layer.id, 'text-halo-color', colors.textOutlineColor);
-	// 		}
-	// 	}
-	// });
-
-	let filterPlanningAreas = $state(false);
-	// $: filter = filterPlanningAreas ? ['==', 'T', ['slice', ['get', 'Attributes'], 0, 1]] : undefined;
-
-	function createPostalFilter(pattern) {
-		if (pattern.includes('*')) {
-			const parts = pattern.split('*');
-			const conditions = parts
-				.map((part, index) => {
-					if (part === '') return null;
-					if (index === 0) {
-						return ['==', ['slice', ['get', 'POSTAL'], 0, ['length', part]], part];
-					} else if (index === parts.length - 1) {
-						return [
-							'==',
-							['slice', ['get', 'POSTAL'], ['-', ['length', ['get', 'POSTAL']], ['length', part]]],
-							part
-						];
-					} else {
-						return ['in', part, ['get', 'POSTAL']];
-					}
-				})
-				.filter((c) => c !== null);
-			return ['all', ...conditions];
-		}
-		// Parse the pattern
-		const prefix = pattern.split('[')[0];
-		const suffix = pattern.split(']')[1];
-		const range = pattern.match(/\[(\d)-(\d)\]/);
-
-		if (!range) {
-			// If there's no range, use a simple equality check
-			return ['==', ['get', 'POSTAL'], pattern];
-		}
-
-		const start = parseInt(range[1]);
-		const end = parseInt(range[2]);
-
-		// Create conditions for each number in the range
-		const rangeConditions = [];
-		for (let i = start; i <= end; i++) {
-			rangeConditions.push(['==', ['get', 'POSTAL'], `${prefix}${i}${suffix}`]);
-		}
-
-		return ['any', ...rangeConditions];
-	}
-
-	function vanillaPostalCodeFilter(pattern) {
-		if (pattern.includes('*')) {
-			const parts = pattern.split('*');
-			return (feature) => {
-				const postal = feature.properties.POSTAL;
-				return parts.every((part, index) => {
-					if (part === '') return true;
-					if (index === 0) return postal.startsWith(part);
-					if (index === parts.length - 1) return postal.endsWith(part);
-					return postal.includes(part);
-				});
-			};
-		}
-
-		// Parse the pattern
-		const prefix = pattern.split('[')[0];
-		const suffix = pattern.split(']')[1] || '';
-		const range = pattern.match(/\[(\d)-(\d)\]/);
-
-		if (!range) {
-			// If there's no range, use a simple equality check
-			return (feature) => feature.properties.POSTAL === pattern;
-		}
-
-		const start = parseInt(range[1]);
-		const end = parseInt(range[2]);
-
-		// Create a function to check if the postal code is in the range
-		return (feature) => {
-			const postal = feature.properties.POSTAL;
-			for (let i = start; i <= end; i++) {
-				if (postal === `${prefix}${i}${suffix}`) {
-					return true;
-				}
-			}
-			return false;
-		};
-	}
-
-	function handleZoomEnd(event) {
-		const {
-			detail: { map }
-		} = event;
-		// console.log('Zoom level changed:', map.getZoom());
-		currentZoom = map.getZoom();
-
-		checkZoomAndUpdate();
-	}
-
-	let filterPostalCode = $derived(inputValue ? createPostalFilter(inputValue) : null);
 
 	function debounce(func, wait) {
 		let timeout;
@@ -454,13 +466,11 @@
 		};
 	}
 
-	const debouncedHandleInput = debounce(handleInput, 500); // 300ms delay
+	const debouncedHandleInput = debounce((event) => {
+		if (!workerReady || !postalWorker) return;
 
-	function postalCodeDataFilter(val) {
-		const wildcardFilter = vanillaPostalCodeFilter(val);
-		const res = $postalCodesStore.data.features?.filter(wildcardFilter);
-		return res;
-	}
+		handleInput(event);
+	}, 300);
 
 	let validInput = $derived(/^\d{0,6}$/.test(displayedValue));
 	let showError = $derived(touched && !validInput);
@@ -483,187 +493,50 @@
 		// Round to one decimal place
 		return Math.round(zoomLevel * 10) / 10;
 	}
-
 	function handleInput(event) {
 		if (event) {
 			touched = true;
 		}
-		const input = event.target;
-		const newValue = input.value;
 
-		if (validInput) {
-			// displayedValue = shownVal;
+		if (validInput || displayedValue === '') {
 			inputValue = displayedValue + '*';
-			const numCodes = postalCodeDataFilter(inputValue);
+
+			// Clear polygons when input changes
+			filteredPolygons = null;
 
 			if (displayedValue.trim().length === 0) {
 				resetView();
-			} else {
-				if (numCodes.length > 0) {
-					previousWorkingPostal = numCodes[0].properties.POSTAL;
-					if (numCodes.length < 6 && displayedValue.length > 4) {
-						flyToFilteredPoints({ zoom: 18, pitch: 25, bearing: 35, center: true });
-						showHeatmap = false;
-					} else {
-						showHeatmap = true;
-						setTimeout(
-							flyToFilteredPoints({ zoom: getZoomLevel(Number(displayedValue)), center: false }),
-							200
-						);
-					}
-				}
 			}
 		}
 	}
 
 	function checkZoomAndUpdate() {
-		if (map.getZoom() >= BUILDING_ZOOM_START && inputValue && filterPostalCodeData.length < 12) {
-			console.log('Zoom level is high enough, updating building colors');
-			// updateBuildingColors(filterPostalCodeData);
+		if (totalPostalCodes < NUM_BUILDINGS_TO_RENDER) {
+			// If there are less than NUM_BUILDINGS_TO_RENDER postal codes, we can show building extrusions
+			updateBuildingColors(filterPostalCodeData.features, renderedFeatures);
 		}
 	}
 
-	let filteredPolygons = $state();
-
-	function updateBuildingColors(data) {
+	function updateBuildingColors(data, renderedFeatures = []) {
 		if (!map || !data) return;
-		const features = map.querySourceFeatures('maptiler_planet', {
-			sourceLayer: 'building'
-		});
-		console.log('Number of building features:', features.length);
-		// filter out buildings that are not MultiPolygon
-		const filteredFeatures = features.filter((feature) => feature.geometry.type === 'MultiPolygon');
 
-		const containingPolygons = [];
+		// Only send the necessary data to the worker (strip out circular references)
+		const buildingFeatures = renderedFeatures.map((f) => ({
+			type: 'Feature',
+			geometry: f.geometry,
+			properties: f.properties,
+			id: f.id
+		}));
 
-		filteredFeatures.forEach((building) => {
-			try {
-				if (building.geometry.type !== 'MultiPolygon') {
-					console.warn('Unexpected geometry type:', building.geometry.type);
-					return;
-				}
-
-				building.geometry.coordinates.forEach((polygonCoords, polygonIndex) => {
-					const polygon = turf.rewind(turf.polygon(polygonCoords));
-					const bufferedPolygon = turf.buffer(polygon, 0.5, { units: 'meters' });
-					const containingPoint = data.find((pointFeature) => {
-						if (pointFeature.geometry.type !== 'Point') {
-							console.warn(
-								'Unexpected geometry type in filterPostalCodeData:',
-								pointFeature.geometry.type
-							);
-							return false;
-						}
-						const point = turf.point(pointFeature.geometry.coordinates);
-						return turf.booleanPointInPolygon(point, bufferedPolygon);
-					});
-
-					if (containingPoint) {
-						containingPolygons.push({
-							type: 'Feature',
-							properties: {
-								...building.properties,
-								...containingPoint.properties,
-								original_id: building.id,
-								polygon_index: polygonIndex,
-								render_height: building.properties.render_height || 30
-							},
-							geometry: bufferedPolygon.geometry
-						});
-					}
-				});
-			} catch (error) {
-				console.error('Error processing building:', error, building);
+		// data is your filtered postal code features (array of GeoJSON Features)
+		buildingColorWorker.postMessage({
+			type: 'UPDATE_BUILDING_COLORS',
+			data: {
+				postalPoints: $state.snapshot(data),
+				buildingFeatures
 			}
 		});
-
-		// console.log('Number of polygons containing points:', containingPolygons.length);
-		filteredPolygons = {
-			type: 'FeatureCollection',
-			features: containingPolygons
-		};
-		if (map.getSource('containing-polygons')) {
-			// If it exists, update the data
-			map.getSource('containing-polygons').setData(filteredPolygons);
-		} else {
-			// If it doesn't exist, add the new source
-			map.addSource('containing-polygons', {
-				type: 'geojson',
-				data: filteredPolygons
-			});
-			map.addLayer({
-				id: 'building-extrusions-base',
-				type: 'fill-extrusion',
-				source: 'maptiler_planet',
-				'source-layer': 'building',
-				paint: {
-					'fill-extrusion-color': '#aaa',
-					'fill-extrusion-height': ['get', 'render_height'],
-					'fill-extrusion-base': ['get', 'render_min_height'],
-					'fill-extrusion-opacity': 0
-				}
-			});
-			console.log('Adding new source and layers for containing polygons');
-			console.log('Filtered polygons:', filteredPolygons);
-			// Add the extrusion layer
-			map.addLayer({
-				id: 'building-extrusions',
-				type: 'fill-extrusion',
-				source: 'containing-polygons',
-				paint: {
-					'fill-extrusion-color': '#ff0000',
-					'fill-extrusion-height': [
-						'+',
-						['get', 'render_height'],
-						['*', ['get', 'polygon_index'], 0.05]
-					],
-					'fill-extrusion-base': ['get', 'render_min_height'],
-					'fill-extrusion-opacity': 0.7
-				}
-			});
-			map.addLayer({
-				id: 'building-labels',
-				type: 'symbol',
-				source: 'containing-polygons',
-				minzoom: 16, // Only show labels from zoom level 14 and above
-				paint: {
-					'text-color': '#000',
-					'text-halo-color': '#fff',
-					'text-halo-width': 2,
-					'text-opacity': 1
-				},
-				layout: {
-					'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-					'text-field': ['get', 'ADDRESS'],
-					'text-size': ['interpolate', ['linear'], ['zoom'], 16, 10, 18, 14, 20, 16],
-					'text-anchor': 'bottom',
-					// 'text-offset': [0, 10],
-					'text-justify': 'left',
-					'text-allow-overlap': false,
-					'text-ignore-placement': false,
-					'text-variable-anchor': ['left', 'top'],
-					'text-radial-offset': [
-						'interpolate',
-						['linear'],
-						['zoom'],
-						16,
-						0.5,
-						18,
-						['/', ['get', 'render_height'], 20],
-						20,
-						['/', ['get', 'render_height'], 16]
-					]
-				}
-			});
-		}
-		// Update filteredPolygons to include SVG data
 	}
-
-	$effect(() => {
-		planningAreasCenters = planningAreasData ? calculateCenters(planningAreasData) : null;
-	});
-
-	// END EXTRACT
 </script>
 
 <svelte:head>
@@ -671,14 +544,14 @@
 	<meta name="description" content="This is where the description goes for SEO" />
 	<meta property="og:title" content="Topography of Singapore Postal Codes | Bearylogical" />
 	<meta property="og:description" content="A short explainer on Singapore's postal codes" />
-	<meta property="og:image" content="%sveltekit.assets%/web_thumb.png" />
+	<meta property="og:image" content="/web_thumb.png" />
 	<meta property="og:url" content="https://stories.bearylogical.net/postal-sg/index.html" />
 	<meta property="og:type" content="website" />
 </svelte:head>
 
 <Section>
 	<h2>Topography of Singapore Postal Codes</h2>
-	<p class="text-muted text-small">01 September 2024 // bearylogical</p>
+	<p class="text-muted text-small">(modified) 06 July 2025 // bearylogical</p>
 	<p class="mb">
 		Singapore's postal code system not only aids mail delivery but also offers a unique view of the
 		city's layout and organization. It's like a hidden map showing how the island is structured and
@@ -713,68 +586,153 @@
 			>
 		</li>
 	</ol>
+	<p>
+		<span class="text-small"
+			>(Update) Migrated to svelte-5, expected some differences as optimizations are ongoing!</span
+		>
+	</p>
 </Section>
 
-{#if $postalCodesStore.loading}
+{#if dataLoading}
 	<div class="loading-container">
 		<div class="loading-spinner"></div>
 		<div class="loading-text">Initializing the story..</div>
 	</div>
-{:else if $postalCodesStore.error}
-	<p>Error: {$postalCodesStore.error}</p>
+{:else if dataError}
+	<p>Error: {dataError}</p>
 	<!-- <button on:click={loadData}>Try Again</button> -->
-{:else if $postalCodesStore.data && $postalCodesStore.data.features}
+{:else if totalPostalCodes}
 	<Scroller {threshold} bottom={0.8} bind:index={mapSectionId} bind:progress={progressValue}>
 		{#snippet backgroundElements()}
 			<div slot="background">
 				<div class="col-full height-full">
 					<MapLibre
 						bind:map
-						bind:loaded
-						style={streetsStyle}
-						standardControls={explore}
+						style={modifiedStreetsStyle ?? streetsStyle}
 						center={[103.8198, 1.3221]}
-						zoom={currentZoom}
-						interactive={explore}
+						bind:zoom={currentZoom}
+						maxZoom={20}
+						interactive={false}
 						antialias={true}
-						class="relative aspect-[9/16] max-h-[100vh] w-full sm:aspect-video sm:max-h-fullo"
-						zoomOnDoubleClick={false}
-						on:zoomend={handleZoomEnd}
-						onzoom={() => {
-							const zoomdist = map.getZoom();
-							// map.setPaintProperty(
-							// 	'building-extrusions',
-							// 	'fill-extrusion-opacity',
-							// 	Math.min(1, Math.max(0, (zoomdist - BUILDING_ZOOM_START) / 2))
-							// ); // Fade in between zoom 14-16
+						class="sticky aspect-[9/16] max-h-screen w-full sm:aspect-video sm:max-h-full"
+						onzoomstart={() => {
+							renderHeatmap = false;
+							if (currentZoom > BUILDING_ZOOM_START) {
+								checkZoomAndUpdate();
+							}
 						}}
-						filterLayers={(l) => {
-							// Hide the built-in 3D building layer since we're doing our own.
-							return l.id !== 'building-3d';
+						onzoomend={() => {
+							renderHeatmap = true;
+							if (currentZoom > BUILDING_ZOOM_START) {
+								checkZoomAndUpdate();
+							}
+						}}
+						onmovestart={() => (renderHeatmap = false)}
+						onmoveend={() => (renderHeatmap = true)}
+						onresize={() => {
+							// Resize the map when the window is resized also do some debouncing
+							if (map) {
+								map.resize();
+							}
 						}}
 					>
+						{#if currentZoom > 15}
+							<QuerySourceFeatures
+								bind:features={renderedFeatures}
+								source="maptiler_planet"
+								sourceLayer="building"
+							>
+								<!-- {#snippet children(feature: maplibregl.MapGeoJSONFeature)}
+								<FillExtrusionLayer
+									id="building-extrusions"
+									source="maptiler_planet"
+									sourceLayer="building"
+									paint={{
+											'fill-extrusion-color': '#aaa',
+											'fill-extrusion-height': ['get', 'render_height'],
+											'fill-extrusion-base': ['get', 'render_min_height'],
+											'fill-extrusion-opacity': 0.5
+									}}
+								/>
+							{/snippet} -->
+							</QuerySourceFeatures>
+						{/if}
+						{#if filteredPolygons?.features?.length > 0}
+							<GeoJSONSource id="custom-building-3d" data={filteredPolygons} promoteId="id">
+								{#if showBuildingExtrusions}
+									<FillExtrusionLayer
+										id="building-extrusions"
+										source="custom-building-3d"
+										paint={{
+											'fill-extrusion-color': ['get', 'building_color'],
+											'fill-extrusion-height': ['get', 'render_height'],
+											'fill-extrusion-base': ['get', 'render_min_height'],
+											'fill-extrusion-opacity': 0.7
+										}}
+									/>
+									<SymbolLayer
+										paint={{
+											'text-color': '#000',
+											'text-halo-color': '#fff',
+											'text-halo-width': 2,
+											'text-opacity': 1
+										}}
+										layout={{
+											'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+											'text-field': ['get', 'ADDRESS'],
+											'text-size': ['interpolate', ['linear'], ['zoom'], 16, 10, 18, 14, 20, 16],
+											'text-anchor': 'bottom',
+											// 'text-offset': [0, 10],
+											'text-justify': 'left',
+											'text-allow-overlap': true,
+											'text-ignore-placement': false,
+											'text-variable-anchor': ['left', 'top'],
+											'text-radial-offset': [
+												'interpolate',
+												['linear'],
+												['zoom'],
+												16,
+												0.5,
+												18,
+												['/', ['get', 'render_height'], 20],
+												20,
+												['/', ['get', 'render_height'], 16]
+											]
+										}}
+									/>
+								{/if}
+							</GeoJSONSource>
+						{/if}
+
+						{#if explore}
+							<NavigationControl position={controlPosition} visualizePitch />
+						{/if}
 						{#if showDistricts}
-							<GeoJSON id="planning-areas" data={planningareas} promoteId="name">
+							<GeoJSONSource id="planning-areas" data={planningareas} promoteId="name">
 								{#if showFill}
 									<FillLayer
+										minzoom={8}
+										maxzoom={14}
 										paint={{
-											'fill-color': hoverStateFilter(fillColor, colors.hoverBgColor),
-											'fill-opacity': 0.5
+											'fill-color': fillColor,
+											'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 14, 0.1]
 										}}
 									></FillLayer>
 								{/if}
 								{#if showBorder}
 									<LineLayer
+										minzoom={8}
 										layout={{ 'line-cap': 'round', 'line-join': 'round' }}
 										paint={{ 'line-color': borderColor, 'line-width': 0.7 }}
 									/>
 								{/if}
-								<GeoJSON
+								<GeoJSONSource
 									id="planning-areas-centers"
-									data={planningAreasCenters}
+									data={planningAreasCentersUrl}
 									promoteId="district"
 								>
 									<SymbolLayer
+										minzoom={9}
 										paint={{
 											'text-color': '#010',
 											'text-halo-color': '#fff',
@@ -785,120 +743,61 @@
 											'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
 											'text-allow-overlap': false,
 											'text-field': ['get', 'district'],
-											'text-size': zoomTransition(6, 10, 15, 18),
+											'text-size': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 14, 18, 16],
 											'text-offset': [0, 0]
 											// 'text-anchor': 'left'
 										}}
 									/>
-								</GeoJSON>
-							</GeoJSON>
+								</GeoJSONSource>
+							</GeoJSONSource>
 						{/if}
-						{#if showHeatmap}
-							<GeoJSON
-								id="postal-codes"
-								data={postalcodes}
-								cluster={{
-									radius: 15,
-									maxZoom: 22
-								}}
-							>
-								<HeatmapLayer
-									filter={filterPostalCode}
-									source="postal-codes"
-									maxzoom={BUILDING_ZOOM_START}
-									paint={{
-										// Increase the heatmap weight based on frequency and property magnitude
-										'heatmap-weight': [
-											'interpolate',
-											['linear'],
-											['get', 'point_count'],
-											0,
-											0,
-											1,
-											0.5,
-											5,
-											1
-										],
-										// Increase the heatmap color weight weight by zoom level
-										// heatmap-intensity is a multiplier on top of heatmap-weight
-										'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 19, 3],
-										// Color ramp for heatmap.  Domain is 0 (low) to 1 (high).
-										// Begin color ramp at 0-stop with a 0-transparancy color
-										// to create a blur-like effect.
-										'heatmap-color': [
-											'interpolate',
-											['linear'],
-											['heatmap-density'],
-											0,
-											'rgba(33,102,172,0)',
-											0.2,
-											'rgb(103,169,207)',
-											0.4,
-											'rgb(209,229,240)',
-											0.6,
-											'rgb(253,219,199)',
-											0.8,
-											'rgb(239,138,98)',
-											1,
-											'rgb(178,24,43)'
-										],
-										// Adjust the heatmap radius by zoom level
-										'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 19, 15],
-										// Transition from heatmap to circle layer by zoom level
-										'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 10, 1, 22, 0]
-									}}
+						{#if showHeatmap && renderHeatmap && currentZoom > 9}
+							<div class="heatmap-overlay" transition:fade={{ duration: 100 }}>
+								<DeckGLOverlay
+									style="pointer-events: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;"
+									interleaved
+									layers={[
+										new HeatmapLayer({
+											id: 'heatmap-layer',
+											data: filterPostalCodeDataSimplified,
+											pickable: false,
+											getPosition: (d) => d[0],
+											//emphasize smaller weights
+											getWeight: (d) => d[1],
+											intensity: 3,
+											radiusPixels: (() => {
+												// MapLibre: 9 → 3, 19 → 15
+												const z = currentZoom;
+												if (z <= 9) return 3;
+												if (z >= 19) return 15;
+												return 3 + ((z - 9) / (19 - 9)) * (15 - 3);
+											})(),
+											opacity: 0.6,
+											colorRange: [
+												[33, 102, 172, 0], // transparent blue (0)
+												[103, 169, 207, 255], // light blue (0.2)
+												[209, 229, 240, 255], // pale blue (0.4)
+												[253, 219, 199, 255], // light orange (0.6)
+												[239, 138, 98, 255], // orange (0.8)
+												[178, 24, 43, 255] // deep red (1)
+											]
+										})
+									]}
 								/>
-
-								<!-- {#if showPostalInfo}
-								<SymbolLayer applyToClusters={false} source="postal-codes" filter={filterPostalCode}
-								></SymbolLayer>
-							{/if} -->
-							</GeoJSON>
+							</div>
 						{/if}
-
-						<GeoJSON
-							id="postal-codes-clusters"
-							data={postalcodes}
-							cluster={{
-								radius: 500,
-								maxZoom: 10
-							}}
-						>
-							{#if showClusterCircles}
-								<CircleLayer
-									id="clusters"
-									applyToClusters={false}
-									filter={filterPostalCode}
-									manageHoverState={true}
-									source="postal-codes-clusters"
-									paint={{
-										'circle-color': '#1c9099',
-										'circle-radius': 12,
-										'circle-opacity': 0.8,
-										'circle-stroke-color': '#636363',
-										'circle-stroke-width': 3,
-										'circle-stroke-opacity': hoverStateFilter(0, 1)
-									}}
-								>
-									<!-- <Popup open={true} let:data anchor="top">
-									{@const props = data?.properties}
-									{#if props}
-										<div class="popup-content">
-											<strong>Address:</strong> <span class="address-text">{props.ADDRESS}</span>
-											<br />
-											<strong>Streetname:</strong>
-											<span class="address-text">{props.ROAD_NAME}</span>
-										</div>
-									{/if}
-								</Popup> -->
-								</CircleLayer>
-
+						{#if showPostalInfo}
+							<GeoJSONSource
+								id="postal-codes-clusters"
+								data={filterPostalCodeData}
+								cluster={true}
+								clusterMaxZoom={14}
+								clusterRadius={10}
+								promoteId="POSTAL"
+							>
 								<SymbolLayer
-									filter={filterPostalCode}
 									source="postal-codes-clusters"
 									id="cluster_labels"
-									interactive={false}
-									applyToClusters={false}
 									layout={{
 										'text-field': ['format', 'Address: ', {}, ['get', 'ADDRESS'], {}],
 										'text-variable-anchor': ['right', 'top'],
@@ -912,44 +811,8 @@
 										'text-opacity': ['interpolate', ['linear'], ['zoom'], 8, 1, 13, 0.9]
 									}}
 								/>
-							{/if}
-							{#if showClusterCounts}
-								<SymbolLayer
-									filter={filterPostalCode}
-									source="postal-codes-clusters"
-									id="cluster_labels"
-									interactive={false}
-									applyToClusters
-									layout={{
-										'text-field': [
-											'format',
-											'Count: ',
-											{ 'font-scale': 0.8 },
-											['get', 'point_count_abbreviated'],
-											{ 'font-scale': 1.2 }
-										],
-										'text-size': [
-											'interpolate',
-											['linear'],
-											['zoom'],
-											8,
-											['interpolate', ['linear'], ['get', 'point_count'], 0, 14, 100, 28],
-											13,
-											['interpolate', ['linear'], ['get', 'point_count'], 0, 12, 100, 24]
-										],
-										'text-offset': [0, 0.1],
-										'text-allow-overlap': true,
-										'text-ignore-placement': false
-									}}
-									paint={{
-										'text-color': ['step', ['get', 'point_count'], '#000000', 50, '#ffffff'],
-										'text-halo-color': ['step', ['get', 'point_count'], '#ffffff', 50, '#000000'],
-										'text-halo-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 13, 1],
-										'text-opacity': ['interpolate', ['linear'], ['zoom'], 8, 1, 13, 0.9]
-									}}
-								/>
-							{/if}
-						</GeoJSON>
+							</GeoJSONSource>
+						{/if}
 					</MapLibre>
 					{#if showInputOverlay && progressValue > 0.95}
 						<div class="map-overlay top" transition:fade={{ delay: 250, duration: 300 }}>
@@ -966,15 +829,14 @@
 									<p class=" error">Please enter only digits.</p>
 								{:else if displayedValue?.length > 6}
 									<p class=" error">Postal codes have only 6 digits.</p>
-								{:else if filterPostalCodeData?.length === 0}
+								{:else if totalPostalCodes === 0}
 									<p class=" error">
 										Can't find that postal code, try removing entries or try {previousWorkingPostal}
 									</p>
 								{/if}
 
 								<p style="margin-top: 5px">
-									<Em color="#206095">{filterPostalCodeData?.length}</Em> Postal Codes are currently
-									shown.
+									<Em color="#206095">{totalPostalCodes}</Em> Postal Codes are currently shown.
 								</p>
 							</div>
 						</div>
@@ -1000,8 +862,8 @@
 							system which divides Singapore into 80 postal sectors.
 						</p>
 						<p>
-							<Em color="#206095">{$postalCodesStore.data?.features?.length}</Em> postal codes are displayed
-							on this map to illustrate its distribution.
+							<Em color="#206095">{totalPostalCodes}</Em> postal codes are displayed on this map to illustrate
+							its distribution.
 						</p>
 					</div>
 				</section>
@@ -1067,22 +929,7 @@
 
 	/* COMPONENTS */
 
-	a {
-		color: #206095;
-	}
-
-	a:hover {
-		color: #323132;
-	}
-
-	label {
-		display: block;
-	}
-
-	input,
-	button,
-	select,
-	textarea {
+	input {
 		font-family: inherit;
 		font-size: inherit;
 		-webkit-padding: 0.4em 0;
@@ -1094,32 +941,8 @@
 		border-radius: 2px;
 	}
 
-	input:disabled {
-		color: #ccc;
-	}
-
-	button {
-		color: #333;
-		background-color: #f4f4f4;
-		outline: none;
-	}
-
-	button:disabled {
-		color: #999;
-	}
-
-	button:not(:disabled):active {
-		background-color: #ddd;
-	}
-
-	button:focus {
-		border-color: #666;
-	}
-
 	/* Other layout elements - positioned below header */
-	section,
-	figure,
-	caption {
+	section {
 		display: -webkit-box;
 		display: -ms-flexbox;
 		display: flex;
@@ -1135,56 +958,10 @@
 		z-index: 1; /* Below header but above background */
 	}
 
-	footer {
-		margin: 60px 0 0 0;
-	}
-
-	h1 {
-		font-size: 54px;
-		line-height: 1.3;
-		margin: 30px 0 0 0;
-	}
-
-	h2 {
-		font-size: 30px;
-		margin: 40px 0 -20px 0;
-	}
-
-	h3 {
-		font-size: 22px;
-		margin: 40px 0 -10px 0;
-	}
-
-	p {
-		margin: 30px 0 0 0;
-	}
-
-	img {
-		max-width: 100%;
-		height: auto;
-		vertical-align: middle;
-	}
-
-	blockquote {
-		margin: 30px 0 6px 0;
-		font-size: 30px;
-		color: #777;
-	}
-
-	small {
-		font-size: 14px;
-	}
-
 	/* CLASSES */
 
 	.col-full {
 		width: 100%;
-	}
-
-	.col-wide {
-		width: 100%;
-		max-width: 980px;
-		margin: 0 24px;
 	}
 
 	.col-medium {
@@ -1193,51 +970,8 @@
 		margin: 0 24px;
 	}
 
-	.col-narrow {
-		width: 100%;
-		max-width: 540px;
-		margin: 0 24px;
-	}
-
 	.height-full {
 		min-height: 100vh;
-	}
-
-	.center {
-		text-align: center;
-	}
-
-	.middle {
-		height: 100%;
-		display: -webkit-box;
-		display: -ms-flexbox;
-		display: flex;
-		-webkit-box-orient: vertical;
-		-webkit-box-direction: normal;
-		-ms-flex-direction: column;
-		flex-direction: column;
-		-webkit-box-pack: center;
-		-ms-flex-pack: center;
-		justify-content: center;
-	}
-
-	.caption {
-		margin-top: 8px;
-		text-align: left;
-		font-size: 14px;
-		color: #777;
-	}
-
-	.inset-medium {
-		max-width: 680px;
-		margin-left: auto !important;
-		margin-right: auto !important;
-	}
-
-	.inset-narrow {
-		max-width: 480px;
-		margin-left: auto !important;
-		margin-right: auto !important;
 	}
 
 	.text-big {
@@ -1249,40 +983,8 @@
 		font-size: 14px;
 	}
 
-	.text-indent {
-		margin-left: 30px;
-	}
-
-	.text-shadow {
-		text-shadow: 0 0 8px #000;
-	}
-
-	.text-bold {
-		font-weight: bold;
-	}
-
 	.text-muted {
 		color: #777;
-	}
-
-	.mt {
-		margin-top: 72px;
-	}
-
-	.mb {
-		margin-bottom: 40px;
-	}
-
-	.em {
-		padding: 1px 4px 1px 4px;
-		/*	border-radius: 5px; */
-		font-weight: bold;
-		white-space: nowrap;
-	}
-
-	.em-muted {
-		background-color: #777;
-		color: #fff;
 	}
 
 	/* SCROLL-SPECIFIC ELEMENTS */
@@ -1345,9 +1047,6 @@
 	}
 	:global(svelte-scroller-foreground section div) {
 		pointer-events: all !important;
-	}
-	select {
-		max-width: 350px;
 	}
 
 	@keyframes spin {
