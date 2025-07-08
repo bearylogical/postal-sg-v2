@@ -8,8 +8,8 @@
 		FillExtrusionLayer,
 		NavigationControl,
 		QuerySourceFeatures,
-		SymbolLayer
-		// HeatmapLayer
+		SymbolLayer,
+		HeatmapLayer
 	} from 'svelte-maplibre-gl';
 	import type { FeatureCollection, Feature, Point } from 'geojson';
 	import * as turf from '@turf/turf';
@@ -25,8 +25,8 @@
 	import PostalWorker from '$lib/workers/postal-worker.js?worker';
 	import BuildingColorWorker from '$lib/workers/building-color-worker.ts?worker';
 
-	import { DeckGLOverlay } from '@svelte-maplibre-gl/deckgl';
-	import { HeatmapLayer } from '@deck.gl/aggregation-layers';
+	// import { DeckGLOverlay } from '@svelte-maplibre-gl/deckgl';
+	// import { HeatmapLayer } from '@deck.gl/aggregation-layers';
 
 	import Counter from '$lib/ui/Counter.svelte';
 	import type { LayerSpecification } from 'maplibre-gl';
@@ -248,7 +248,7 @@
 
 	let modifiedStreetsStyle: maplibregl.StyleSpecification | null = $state(null);
 
-	const BUILDING_ZOOM_START = 17;
+	const BUILDING_ZOOM_START = 16;
 	const NUM_BUILDINGS_TO_RENDER = 500; // Number of buildings to render at high zoom levels
 
 	const planningAreasCentersUrl = '/src/assets/singapore_districts_centers.geojson';
@@ -641,21 +641,7 @@
 								bind:features={renderedFeatures}
 								source="maptiler_planet"
 								sourceLayer="building"
-							>
-								<!-- {#snippet children(feature: maplibregl.MapGeoJSONFeature)}
-								<FillExtrusionLayer
-									id="building-extrusions"
-									source="maptiler_planet"
-									sourceLayer="building"
-									paint={{
-											'fill-extrusion-color': '#aaa',
-											'fill-extrusion-height': ['get', 'render_height'],
-											'fill-extrusion-base': ['get', 'render_min_height'],
-											'fill-extrusion-opacity': 0.5
-									}}
-								/>
-							{/snippet} -->
-							</QuerySourceFeatures>
+							></QuerySourceFeatures>
 						{/if}
 						{#if filteredPolygons?.features?.length > 0}
 							<GeoJSONSource id="custom-building-3d" data={filteredPolygons} promoteId="id">
@@ -752,7 +738,7 @@
 							</GeoJSONSource>
 						{/if}
 						{#if showHeatmap && renderHeatmap && currentZoom > 9}
-							<div class="heatmap-overlay" transition:fade={{ duration: 100 }}>
+							<!-- <div class="heatmap-overlay" transition:fade={{ duration: 100 }}>
 								<DeckGLOverlay
 									style="pointer-events: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;"
 									interleaved
@@ -763,8 +749,9 @@
 											pickable: false,
 											getPosition: (d) => d[0],
 											//emphasize smaller weights
-											getWeight: (d) => d[1],
-											intensity: 3,
+											getWeight: (d) => Math.log2(d[1] + 1),
+											intensity: 1,
+											threshold: 0.01,
 											radiusPixels: (() => {
 												// MapLibre: 9 → 3, 19 → 15
 												const z = currentZoom;
@@ -784,17 +771,66 @@
 										})
 									]}
 								/>
-							</div>
+							</div> -->
 						{/if}
-						{#if showPostalInfo}
-							<GeoJSONSource
-								id="postal-codes-clusters"
-								data={filterPostalCodeData}
-								cluster={true}
-								clusterMaxZoom={14}
-								clusterRadius={10}
-								promoteId="POSTAL"
-							>
+
+						<GeoJSONSource
+							id="postal-codes-clusters"
+							data={filterPostalCodeData}
+							cluster={true}
+							clusterMaxZoom={22}
+							clusterRadius={3}
+							promoteId="POSTAL"
+						>
+							{#if showHeatmap && renderHeatmap && currentZoom > 9}
+								<HeatmapLayer
+									id="postal-heatmap"
+									source="postal-codes-clusters"
+									maxzoom={BUILDING_ZOOM_START}
+									paint={{
+										// Increase the heatmap weight based on frequency and property magnitude
+										'heatmap-weight': [
+											'interpolate',
+											['linear'],
+											['get', 'point_count'],
+											0,
+											0,
+											1,
+											0.5,
+											5,
+											1
+										],
+										// Increase the heatmap color weight weight by zoom level
+										// heatmap-intensity is a multiplier on top of heatmap-weight
+										'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 19, 3],
+										// Color ramp for heatmap.  Domain is 0 (low) to 1 (high).
+										// Begin color ramp at 0-stop with a 0-transparancy color
+										// to create a blur-like effect.
+										'heatmap-color': [
+											'interpolate',
+											['linear'],
+											['heatmap-density'],
+											0,
+											'rgba(33,102,172,0)',
+											0.2,
+											'rgb(103,169,207)',
+											0.4,
+											'rgb(209,229,240)',
+											0.6,
+											'rgb(253,219,199)',
+											0.8,
+											'rgb(239,138,98)',
+											1,
+											'rgb(178,24,43)'
+										],
+										// Adjust the heatmap radius by zoom level
+										'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 9, 5, 19, 8],
+										// Transition from heatmap to circle layer by zoom level
+										'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 10, 1, 22, 0]
+									}}
+								/>
+							{/if}
+							{#if showPostalInfo}
 								<SymbolLayer
 									source="postal-codes-clusters"
 									id="cluster_labels"
@@ -811,8 +847,8 @@
 										'text-opacity': ['interpolate', ['linear'], ['zoom'], 8, 1, 13, 0.9]
 									}}
 								/>
-							</GeoJSONSource>
-						{/if}
+							{/if}
+						</GeoJSONSource>
 					</MapLibre>
 					{#if showInputOverlay && progressValue > 0.95}
 						<div class="map-overlay top" transition:fade={{ delay: 250, duration: 300 }}>
