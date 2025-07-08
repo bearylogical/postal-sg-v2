@@ -249,7 +249,7 @@
 	let modifiedStreetsStyle: maplibregl.StyleSpecification | null = $state(null);
 
 	const BUILDING_ZOOM_START = 17;
-	const NUM_BUILDINGS_TO_RENDER = 50; // Number of buildings to render at high zoom levels
+	const NUM_BUILDINGS_TO_RENDER = 500; // Number of buildings to render at high zoom levels
 
 	const planningAreasCentersUrl = '/src/assets/singapore_districts_centers.geojson';
 	let layers: LayerSpecification[] = $state.raw([]);
@@ -616,7 +616,7 @@
 						antialias={true}
 						class="sticky aspect-[9/16] max-h-screen w-full sm:aspect-video sm:max-h-full"
 						onzoomstart={() => {
-							renderHeatmap = false;
+							renderHeatmap = currentZoom <= BUILDING_ZOOM_START;
 							if (currentZoom > BUILDING_ZOOM_START) {
 								checkZoomAndUpdate();
 							}
@@ -988,12 +988,6 @@
 	}
 
 	/* SCROLL-SPECIFIC ELEMENTS */
-
-	svelte-scroller-background-container {
-		pointer-events: all !important;
-		position: relative;
-		z-index: 2; /* Above regular content but below header */
-	}
 
 	[slot='foreground'] {
 		position: relative;
